@@ -32,8 +32,8 @@
 #include <linux/freezer.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
-//#include <mach/jzmmc.h>
-#include <soc/mmc.h>
+#include <mach/jzmmc.h>
+//#include <soc/mmc.h>
 #endif
 
 
@@ -445,10 +445,10 @@ static int atbm_sdio_thread_init(struct atbm_sdio_thread *thread)
 }
 
 #ifdef LINUX_OS
-//struct rcu_synchronize {
-//	struct rcu_head head;
-//	struct completion completion;
-//};
+struct rcu_synchronize {
+	struct rcu_head head;
+	struct completion completion;
+};
 
 static struct rcu_synchronize atbm_rcu;
 
