@@ -45,7 +45,7 @@ extern struct atbm_common 			*g_hw_priv;
 			rcu_read_unlock();							\
 			break;										\
 		}												\
-		ret = snprintf(_show_buff+(_show)->show_count,(_show)->show_size-(_show)->show_count,__VA_ARGS__);		\
+		ret = snprintf(_show_buff+(_show)->show_count,(_show)->show_size-(_show)->show_count,__VA_ARGS__);\
 		if(ret>=0){											\
 			(_show)->show_count+=ret;						\
 			if((_show)->show_count >= (_show)->show_size){  \
@@ -278,13 +278,17 @@ static bool atbm_module_attr_echo_disable(struct atbm_store_cmd_code *cmd_store,
 static bool atbm_module_attr_example(struct atbm_store_cmd_code *cmd_store,const char *buf,int len);
 static bool atbm_module_attr_help(struct atbm_store_cmd_code *cmd_store,const char *buf,int len);
 static ssize_t atbm_module_attr_default_show(struct atbm_store_cmd_code *cmd_code,char *buf,bool show);
-static bool atbm_module_attr_set_ap_config(struct atbm_store_cmd_code *cmd_store,														const char *buf,int len);
+#ifndef CONFIG_ATBM_SDIO_ATCMD	
+static bool atbm_module_attr_set_ap_config(struct atbm_store_cmd_code *cmd_store,const char *buf,int len);
+#endif
 struct atbm_store_cmd_code cmd_code_buff[]={
 	ATBM_CMD_INIT(ATBM_CODE_STR__ATTR_HELP,ATBM_CODE_STR__ATTR_HELP_INFO,atbm_module_attr_help,atbm_module_attr_default_show),
 	ATBM_CMD_INIT(ATBM_CODE_STR__ATTR_EXAMPLE,ATBM_CODE_STR__ATTR_EXAMPLE_INFO,atbm_module_attr_example,atbm_module_attr_default_show),
 	ATBM_CMD_INIT(ATBM_CODE_STR__ATTR_DISABLE_ECHO,ATBM_CODE_STR__ATTR_DISABLE_ECHO_INFO,atbm_module_attr_echo_disable,atbm_module_attr_default_show),
 	ATBM_CMD_INIT(ATBM_CODE_STR__ATTR_ENABLE_ECHO,ATBM_CODE_STR__ATTR_ENABLE_ECHO_INFO,atbm_module_attr_echo_enable,atbm_module_attr_default_show),
+#ifndef CONFIG_ATBM_SDIO_ATCMD	
 	ATBM_CMD_INIT(ATBM_CODE_STR__ATTR_AP_CONF,ATBM_CODE_STR__ATTR_AP_CONF_INFO,atbm_module_attr_set_ap_config,atbm_module_attr_default_show),
+#endif
 };
 
 static unsigned int atbm_hash_string_len(const char *pos,unsigned int pos_len)
@@ -681,7 +685,7 @@ static bool atbm_module_attr_help(struct atbm_store_cmd_code *cmd_store,const ch
 	return true;
 }
 
-
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 static struct atbm_vif * atbm_module_get_sdata_by_name(const char *name)
 {
 	struct net_device *net_dev = NULL;
@@ -938,6 +942,7 @@ static bool atbm_module_config_macs(const char *posl,const char *posr,void *priv
 	atbm_printk_always("%s:mac[%pM]\n",__func__,pos_mac->mac);
 	return true;
 }
+#endif
 
 static bool atbm_module_echo_enable_num_echo(const char *posl,const char *posr,void *priv)
 {
@@ -1040,6 +1045,7 @@ exit:
 /*
 *set ap configs:ap_config ifname=[xxx] channel=[x] ssid=[ap] bssid=[xx:xx:xx:xx:xx:xx]
 */
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 static bool atbm_module_attr_set_ap_config(struct atbm_store_cmd_code *cmd_store,const char *buf,int len)
 {
 	bool res = true;
@@ -1139,6 +1145,7 @@ exit:
 	rcu_assign_pointer(cmd_store->cmd_private,NULL);
 	return res;
 }
+#endif
 
 static bool atbm_store_cmd_is_ready(struct atbm_store_cmd_code *cmd_store)
 {

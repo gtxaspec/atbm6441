@@ -143,7 +143,7 @@ int atbm_spi_rx_bh_cb(struct atbm_common *hw_priv,struct sk_buff *skb)
 
 	wsm_len = __le32_to_cpu(wsm->len);
 
-	wsm_id	= __le32_to_cpu(wsm->id) & 0xFFF;
+	wsm_id	= __le32_to_cpu(wsm->id) & 0x1FFF;
 	wsm_seq = (__le32_to_cpu(wsm->id) >> 13) & 7;
 
 

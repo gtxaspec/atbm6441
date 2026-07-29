@@ -39,7 +39,12 @@
  module_param(dpll_value,charp,0644);
  MODULE_PARM_DESC(dpll_value,"Need to config dpll reg");
 
-
+extern int atbm_sdio_memcpy_fromio_for_sleep(struct sbus_priv *self,
+				     unsigned int addr,
+				     void *dst, int count);
+extern int atbm_sdio_memcpy_toio_for_sleep(struct sbus_priv *self,
+				   unsigned int addr,
+				   const void *src, int count);
 
  /* Sdio addr is 4*spi_addr */
 #define SPI_REG_ADDR_TO_SDIO(spi_reg_addr) ((spi_reg_addr) << 2)
@@ -90,6 +95,40 @@ static int __atbm_reg_write(struct atbm_common *hw_priv, u16 addr,
 	return hw_priv->sbus_ops->sbus_write_sync(hw_priv->sbus_priv,
 						sdio_reg_addr_17bit,
 						buf, buf_len);
+}
+
+int __atbm_reg_read_for_sleep(struct atbm_common *hw_priv, u16 addr,
+				void *buf, u32 buf_len)
+{
+	u16 addr_sdio;
+	u32 sdio_reg_addr_17bit ;
+
+	/* Check if buffer is aligned to 4 byte boundary */
+	if (WARN_ON(((unsigned long)buf & 3) && (buf_len > 4))) {
+		atbm_dbg(ATBM_APOLLO_DBG_ERROR,
+			   "%s: buffer is not aligned.\n", __func__);
+		return -EINVAL;
+	}
+
+	/* Convert to SDIO Register Address */
+	addr_sdio = SPI_REG_ADDR_TO_SDIO(addr);
+	sdio_reg_addr_17bit = SDIO_ADDR17BIT(0, 0, 0, addr_sdio);
+
+	return atbm_sdio_memcpy_fromio_for_sleep(hw_priv->sbus_priv, sdio_reg_addr_17bit, buf, buf_len);
+}
+
+int __atbm_reg_write_for_sleep(struct atbm_common *hw_priv, u16 addr,
+				const void *buf, u32 buf_len)
+{
+	u16 addr_sdio;
+	u32 sdio_reg_addr_17bit ;
+
+	/* Convert to SDIO Register Address */
+	addr_sdio = SPI_REG_ADDR_TO_SDIO(addr);
+	sdio_reg_addr_17bit = SDIO_ADDR17BIT(0, 0, 0, addr_sdio);
+	//printk("__atbm_reg_write sdio_reg_addr_17bit 0x%x,addr_sdio 0x%x,len %d,buf_id %d\n",sdio_reg_addr_17bit,addr_sdio,buf_len,buf_id);
+
+	return atbm_sdio_memcpy_toio_for_sleep(hw_priv->sbus_priv, sdio_reg_addr_17bit, buf, buf_len);
 }
 
 static int __atbm_data_read(struct atbm_common *hw_priv, u16 addr,
@@ -233,6 +272,19 @@ int atbm_reg_write(struct atbm_common *hw_priv, u16 addr, const void *buf,
 	hw_priv->sbus_ops->unlock(hw_priv->sbus_priv);
 	return ret;
 }
+
+int atbm_reg_read_for_sleep(struct atbm_common *hw_priv, u16 addr, void *buf,
+			u32 buf_len)
+{
+	return __atbm_reg_read_for_sleep(hw_priv, addr, buf, buf_len);
+}
+
+int atbm_reg_write_for_sleep(struct atbm_common *hw_priv, u16 addr, const void *buf,
+			u32 buf_len)
+{
+	return __atbm_reg_write_for_sleep(hw_priv, addr, buf, buf_len);
+}
+
 int atbm_reg_read_unlock(struct atbm_common *hw_priv, u16 addr, void *buf,
 			u32 buf_len)
 {

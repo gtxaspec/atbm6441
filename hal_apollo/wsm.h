@@ -436,6 +436,12 @@ struct atbm_common;
 /*HOST customer command request data*/
 #define WSM_EVENT_HOST_CUSTOMER_CMD_REQ     (15)
 
+/*HOST customer private event*/
+#define WSM_EVENT_HOST_CUSTOMER_PRIVATE     (0x4321)
+
+/*HOST customer private event*/
+#define WSM_EVENT_ATCMD_RECIVE     			(0x5678)
+
 /* MAC Addr Filter */
 #define WSM_MIB_ID_MAC_ADDR_FILTER	0x1030
 
@@ -657,6 +663,12 @@ struct atbm_common;
 #define WSM_RECEIVE2_INDICATION_ID		 	 	0x0814
 
 
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+#define WSM_SDIO_ATCMD_BASE				0x1000
+#define	WSM_SDIO_ATCMD_DIRECT_ID		0x1001
+#endif
+
+
 /* Frame template types */
 #define WSM_FRAME_TYPE_PROBE_REQUEST	(0)
 #define WSM_FRAME_TYPE_BEACON		(1)
@@ -730,6 +742,7 @@ struct atbm_common;
 #define WSM_FILTER_PORT_TYPE_DST	(0)
 #define WSM_FILTER_PORT_TYPE_SRC	(1)
 
+#define MAX_WSM_BUF_LEN (1632)//
 
 struct wsm_hdr {
 	__le16 len;
@@ -800,6 +813,10 @@ struct wsm_caps {
 	u32 exceptionaddr;
 	u32 NumOfHwXmitedAddr;
 };
+
+#define CAPABLITIES_2_4_GHZ 			(1<<0)
+#define CAPABLITIES_NEW_RATE_POLICY 	(1<<1)
+#define CAPABLITIES_SDIO_TX_LIST_CHECK 	(1<<2)
 
 /* ******************************************************************** */
 /* WSM commands								*/
@@ -881,6 +898,7 @@ struct wsm_scan_result_info{
 	   b40M:1,
 	   encrypt:1;
 	s8 rssi;
+	short reserved[2];
 };
 
 struct wsm_scan_result_req{
@@ -1119,7 +1137,13 @@ struct wsm_multi_rx {
 /* = sizeof(generic hi hdr) + sizeof(wsm hdr) */
 #define WSM_RX_EXTRA_HEADROOM (16)
 
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+#define MAX_SDIO_EVENT_BUFFER_LEN 1500
+#define SDIO_EVENT_IND_LEN	504
+#else
 #define MAX_SDIO_EVENT_BUFFER_LEN 504
+#define SDIO_EVENT_IND_LEN	504
+#endif
 
 #define CONNECT_FLAG_WMM BIT(0)
 
@@ -2162,6 +2186,60 @@ struct wsm_check_alive_req{
 #define WSM_CHECK_ALIVE_RESP_ID     0x043A
 
 int wsm_check_alive(struct atbm_common *hw_priv, void *buffer,size_t buf_size);
+
+struct wsm_direct_trans_buffer_req{
+	u32 status;
+	u8 trans[1600];
+};
+
+#define WSM_DIRECT_TRANS_BUFFER_REQ_ID      0x003B
+#define WSM_DIRECT_TRANS_BUFFER_RESP_ID     0x043B
+
+int wsm_direct_trans_buffer(struct atbm_common *hw_priv, void *buffer,size_t buf_size);
+
+#define WSM_FORCE_REBOOT_REQ_ID     0x003C
+#define WSM_FORCE_REBOOT_RESP_ID    0x043C
+
+int wsm_force_reboot(struct atbm_common *hw_priv, void *buffer,size_t buf_size);
+
+#define WSM_NETWORK_OK_REQ_ID     0x003D
+#define WSM_NETWORK_OK_RESP_ID    0x043D
+
+int wsm_host_network_ok_notify(struct atbm_common *hw_priv, void *buffer,size_t buf_size);
+
+#define WSM_HOST_REBOOT_NOTIFY_REQ_ID     0x003E
+#define WSM_HOST_REBOOT_NOTIFY_RESP_ID    0x043E
+
+int wsm_host_reboot_notify(struct atbm_common *hw_priv, void *buffer,size_t buf_size);
+
+#define WSM_EXTEND_MSG_REQ_ID     		0x003F
+#define WSM_EXTEND_MSG_RESP_ID    		0x043F
+struct  wsm_extend_msg_req{
+	int status;
+	u8 externId;
+	u8 reserved[3];
+};
+
+#define WSM_EXTEND_FAST_CFG_RECV_ID		0x00
+struct  wsm_fast_cfg_recv_req{	//HI_POWERSAVE_MODE_REQ
+	u8 enable;
+	u8 reserved;
+	u16 time;
+}__packed;
+int wsm_ext_fast_cfg_recv(struct atbm_common *hw_priv, void *buffer,size_t buf_size);
+
+#define WSM_EXTEND_FAST_CFG_SEND_ID     0x01
+struct  wsm_fast_cfg_send_req{	//HI_POWERSAVE_MODE_REQ
+	u8 enable;
+	u8 reserved;
+	u16 time;
+	u8 ssid_len;
+	u8 password_len;
+	u8 ssid[32];
+	u8 password[64];
+}__packed;
+int wsm_ext_fast_cfg_send(struct atbm_common *hw_priv, void *buffer,size_t buf_size);
+
 
 enum{
 	WAKEUP_IO,			// hardware io

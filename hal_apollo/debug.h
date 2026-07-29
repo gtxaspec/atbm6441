@@ -37,6 +37,15 @@ struct cw200_common;
  if ((level) & ATBM_APOLLO_DBG_LEVEL)		\
 		atbm_printk_init(__VA_ARGS__);	\
 
+extern u32 atbm_control_debug_mask;
+
+#define ATBM_CONTROL_DEBUG_RX     BIT(0)
+#define ATBM_CONTROL_DEBUG_TX     BIT(1)
+#define ATBM_CONTROL_DEBUG_SLEEP  BIT(2)
+
+#define atbm_control_dbg(level, ...)				\
+  if ((level) & atbm_control_debug_mask)		 \
+		 atbm_printk_init(__VA_ARGS__);  \
 
  /* TODO It should be removed before official delivery */
  static __inline void frame_hexdump(char *prefix, u8 *data, int len)

@@ -27,6 +27,8 @@
 #include "iface.h"
 #include "ieee80211_i.h"
 #include "txrx.h"
+#include "debug.h"
+
 enum work_action {
 	WORK_ACT_MISMATCH,
 	WORK_ACT_NONE,
@@ -35,6 +37,12 @@ enum work_action {
 	WORK_ACT_ASSOCIAT,
 	WORK_ACT_DEAUTHEN,
 };
+
+void atbm_get_connectconfig(struct atbm_common *hw_priv);
+void atbm_set_tcp_port_filter(struct atbm_common *hw_priv);
+int atbm_notify_sta_connect_ok(struct atbm_common *hw_priv);
+
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 void ieee80211_send_auth(struct        atbm_vif *vif,
 			 u16 transaction, u16 auth_alg,
 			 u8 *extra, size_t extra_len, const u8 *bssid,
@@ -403,13 +411,14 @@ void atbm_sta_connect_event(struct atbm_vif *vif,struct HostConnectEvent * hoste
 	atbm_printk_always( "%s: associated\n", __func__);
 	vif->connect_success =1;
 	memcpy(vif->ap_info.bssid,hostevent->bssid,6);
-	memset(vif->ptk_pn, 0, CCMP_PN_LEN);
-	vif->ptk_pn_init = 1;
+	memset(vif->ptk_pn, 0, sizeof(vif->ptk_pn));
+	memset(vif->ptk_pn_init, 1, sizeof(vif->ptk_pn_init));
 	memset(vif->ptk_noqos_pn, 0, CCMP_PN_LEN);
 	vif->ptk_noqos_pn_init= 1;
 	memset(vif->gtk_pn, 0, CCMP_PN_LEN);
 	vif->gtk_pn_init= 1;
 	mutex_unlock(&vif->hw_priv->sta_mtx);
+	atbm_notify_sta_connect_ok(vif->hw_priv);
 exit:
 	return ;
 
@@ -643,8 +652,6 @@ static void ieee80211_iface_work(struct work_struct *work)
 		atbm_kfree_skb(skb);
 	}
 }
-void atbm_get_connectconfig(struct atbm_common *hw_priv);
-void atbm_set_tcp_port_filter(struct atbm_common *hw_priv);
 
 static int atbm_open(struct net_device *dev)
 {
@@ -734,6 +741,62 @@ void atbm_set_qos_hdr(struct atbm_vif *vif,
 	}
 }
 
+struct atbm_ip_addr {
+	u32 addr;
+}__packed;
+
+struct atbm_ip_hdr {
+  /* version / header length / type of service */
+  u8 _v_hl;
+  u8 _tos;
+  /* total length */
+  u16 _len;
+  /* identification */
+  u16 _id;
+  /* fragment offset field */
+  u16 _offset;
+  /* time to live / protocol*/
+ u8 _ttl;
+ u8 _proto;
+  /* checksum */
+  u16 _chksum;
+  /* source and destination IP addresses */
+  struct atbm_ip_addr src;
+  struct atbm_ip_addr dest; 
+}__packed;
+
+struct atbm_ieee8023_hdr {
+	unsigned char	h_dest[ETH_ALEN];	/* destination eth addr	*/
+	unsigned char	h_source[ETH_ALEN];	/* source ether addr	*/
+	unsigned short	h_proto;		/* packet type ID field	*/
+}__packed;
+
+static u16 atbm_htons(u16 n)
+{
+  return ((n & 0xff) << 8) | ((n & 0xff00) >> 8);
+}
+
+static unsigned int atbm_cfg80211_classify8021d(struct sk_buff *skb)
+{
+	unsigned int dscp;
+	struct atbm_ip_hdr *iphdr;
+	struct atbm_ieee8023_hdr *ethhdr;
+	u16 protocol = 0;
+
+	ethhdr = (struct atbm_ieee8023_hdr *)(skb->data);
+	protocol = atbm_htons(ethhdr->h_proto);
+
+	if (protocol==ETH_P_IP){
+		//dscp = (unsigned int)(atbm_skb_pull(skb,ETH_HLEN+1)) & 0xfc;
+		iphdr = (struct atbm_ip_hdr *)(((u8 *)(skb->data))+ETH_HLEN);
+		dscp =  iphdr->_tos & 0xfc;
+	}
+	else{
+		return 0;
+	}
+	return dscp >> 5;
+}
+
 extern int is_pre_rmmod;
 
 netdev_tx_t atbm_subif_start_xmit(struct sk_buff *skb,
@@ -761,6 +824,9 @@ netdev_tx_t atbm_subif_start_xmit(struct sk_buff *skb,
 		ret = NETDEV_TX_OK;
 		goto fail;
 	}
+
+	skb->priority = atbm_cfg80211_classify8021d(skb);
+
 	/* convert Ethernet header to proper 802.11 header (based on
 	 * operation mode) */
 	ethertype = (skb->data[12] << 8) | skb->data[13];
@@ -897,6 +963,7 @@ netdev_tx_t atbm_subif_start_xmit(struct sk_buff *skb,
 	
 	return NETDEV_TX_OK;
 fail:
+	atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, "%s fail\n", __func__);
 	if (ret == NETDEV_TX_OK)
 		dev_kfree_skb(skb);
 
@@ -914,18 +981,37 @@ static int atbm_change_mtu(struct net_device *dev, int new_mtu)
 }
 
 #ifdef LINUX_OS
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(5, 4, 0))
 static u16 atbm_netdev_select_queue(struct net_device *dev,
-                                         struct sk_buff *skb
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0))
-					,
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
-                                        struct net_device *sb_dev,// void *accel_priv,
-#else
+										struct sk_buff *skb,	
+										struct net_device *sb_dev)
+
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
+static u16 atbm_netdev_select_queue(struct net_device *dev,
+										struct sk_buff *skb,
+										struct net_device *sb_dev,	
+										select_queue_fallback_t fallback)
+
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 37))
+static u16 atbm_netdev_select_queue(struct net_device *dev,
+										struct sk_buff *skb,
 										void *accel_priv,
+										select_queue_fallback_t fallback)
+
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0))
+static u16 atbm_netdev_select_queue(struct net_device *dev,
+										struct sk_buff *skb,
+										struct net_device *sb_dev,	
+										select_queue_fallback_t fallback)
+
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0))
+static u16 atbm_netdev_select_queue(struct net_device *dev,
+										struct sk_buff *skb,
+										void *accel_priv,
+										select_queue_fallback_t fallback)
+#else
+static u16 atbm_netdev_select_queue(struct net_device *dev,struct sk_buff *skb)
 #endif
-                                         select_queue_fallback_t fallback
-#endif
-					 )
 
 {
 	return 0;
@@ -1055,6 +1141,31 @@ fail:
 	free_netdev(ndev);
 	return -1;
 }
+
+#else	//#ifndef CONFIG_ATBM_SDIO_ATCMD
+
+int atbm_netdev_none(struct atbm_common *hw_priv)
+{
+	struct atbm_vif *vif = NULL;
+
+	vif = kzalloc(sizeof(struct atbm_vif), GFP_KERNEL);
+	vif->hw_priv = hw_priv;
+	memcpy(vif->addr, hw_priv->mac_addr, ETH_ALEN);
+	atomic_set(&vif->enabled,0);
+	vif->if_id = 0;
+	vif->type = NL80211_IFTYPE_STATION;
+	atbm_skb_queue_head_init(&vif->skb_queue);
+
+	hw_priv->vif_list[vif->if_id] = vif;
+#if (ATBM_WIFI_PLATFORM == PLATFORM_ANKAI_RTOS)
+	atomic_set(&vif->enabled,1);
+#endif
+
+	return 0;
+}
+
+#endif
+
 void atbm_remove_interfaces(struct atbm_common *hw_priv)
 {
 	int i = 0;
@@ -1069,6 +1180,8 @@ void atbm_remove_interfaces(struct atbm_common *hw_priv)
 			continue;
 		rcu_assign_pointer(hw_priv->vif_list[i],NULL);
 		synchronize_rcu();
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 		unregister_netdevice(vif->ndev);
+#endif
 	}
 }

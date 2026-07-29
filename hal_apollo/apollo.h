@@ -108,6 +108,9 @@
 #define ATBM_APOLLO_SCAN_MEASUREMENT_ACTIVE  (1)
 #endif
 
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+#define ATBM_AT_CMD_MAX_SW_CACHE			8	//must 2 ^ n
+#endif
 
 /* Please keep order */
 enum atbm_join_status {
@@ -136,6 +139,14 @@ enum atbm_bss_loss_status {
 	ATBM_APOLLO_BSS_LOSS_CONFIRMED,
 };
 
+
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+struct at_cmd_direct{
+	u32 len;
+	u8 cmd[1500];	
+};
+#endif
+
 struct atbm_common {
 	struct device			    *pdev;
 	struct atbm_vif				__rcu *vif_list[ATBM_WIFI_MAX_VIFS];
@@ -148,6 +159,7 @@ struct atbm_common {
 	const struct sbus_ops		*sbus_ops;
 	struct sbus_priv		    *sbus_priv;
 	int 						init_done;
+	int 						close_driver;
 	int							hw_type;
 	int							hw_revision;
 	int							fw_revision;
@@ -192,11 +204,17 @@ struct atbm_common {
 	struct wsm_cmd			wsm_cmd;
 	struct wsm_tcp_filter_req  tcp_filter_req;	
 	struct wsm_powersave_mode_req  ps_mode_req;	
+	struct wsm_customer_cert_save_req cert_save_req;
+	struct wsm_direct_trans_buffer_req direct_buffer_req;
 	wait_queue_head_t		wsm_cmd_wq;
 	atomic_t			tx_lock;
 	u32				pending_frame_id;
 
-
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+	u8 *at_cmd_buf[ATBM_AT_CMD_MAX_SW_CACHE];
+	u32 at_cmd_put;
+	u32 at_cmd_get;
+#endif
 
 	/* WSM events */
 	spinlock_t		event_queue_lock;
@@ -273,7 +291,9 @@ struct atbm_ap_config{
 };
 /* Virtual Interface State. One copy per VIF */
 struct atbm_vif {
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 	struct net_device *ndev;
+#endif
 	atomic_t			enabled;
 	spinlock_t			vif_lock;
 	int					if_id;
@@ -286,8 +306,8 @@ struct atbm_vif {
 	struct atbm_common	*hw_priv;	
 	u8					 connect_success;
 	struct ieee80211_key group_key;
-	u8 ptk_pn[CCMP_PN_LEN];
-	u8 ptk_pn_init;
+	u8 ptk_pn[8][CCMP_PN_LEN];
+	u8 ptk_pn_init[8];
 	u8 gtk_pn[CCMP_PN_LEN];
 	u8 gtk_pn_init;
 	u8 ptk_noqos_pn[CCMP_PN_LEN];

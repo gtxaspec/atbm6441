@@ -174,7 +174,7 @@ static void ieee80211_release_reorder_frames(struct atbm_common *hw_priv,
  *
  * Callers must hold tid_agg_rx->reorder_lock.
  */
-static int HT_RX_REORDER_BUF_TIMEOUT = (HZ / 10);
+static int HT_RX_REORDER_BUF_TIMEOUT = (HZ / 3);
 static int Sta_shortTcp_RxCnt = 0;
 static void ieee80211_sta_reorder_release(struct atbm_common *hw_priv,
 					  struct tid_ampdu_rx *tid_agg_rx,struct sk_buff_head *frames)
@@ -575,13 +575,301 @@ static void ccmp_tkip_hdr2pn(u8 *pn, u8 *hdr, bool is_ccmp)
 	}
 }
 
+#define BUFF_STORED_LEN		(64)
+#define SEQ_NUM_MASKER		(0xfff)
+
+struct replay_cnt_info{
+	unsigned short frame_replaycnt_table[BUFF_STORED_LEN];//save replaycnt low
+	unsigned char frame_replaycnt_fillcnt[BUFF_STORED_LEN];//check insert
+	unsigned short frame_replaycnt_base_low;//pn low 2bytes
+	unsigned int   frame_replaycnt_base_high;//pn high 4bytes
+	unsigned short frame_replaycnt_offset_ssn;//保存到table中最小frame_replaycnt_table
+	unsigned short sn;//窗口最小sn
+	unsigned short sn_max;//窗口最大sn
+};
+struct replay_cnt_info replay_inf[8/*tid max num*/] = {0};
+
+static void atbm_flush_replay(u16 sn, u8 tid)
+{
+	/*如果replaycnt的offset 太大容易越界,所以将replaycnt_base 增大*/
+	int k;
+	int idex = sn&(BUFF_STORED_LEN-1);
+	u16 lowest_replay=0;
+
+	/*更新基准replaycnt_low*/
+	replay_inf[tid].frame_replaycnt_base_low += 0x8000;
+	if(replay_inf[tid].frame_replaycnt_base_low < 0x8000){
+		replay_inf[tid].frame_replaycnt_base_high++;
+	}
+
+	/*获取最低SN index*/
+	idex++;
+
+	if (replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)] < 0x8000){
+		replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)] = 0x8000;
+	}
+	lowest_replay = replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)] - 0x8000;
+
+	/*更新最小replaycnt_low*/
+	if (replay_inf[tid].frame_replaycnt_offset_ssn < 0x8000){
+		replay_inf[tid].frame_replaycnt_offset_ssn = 0;
+	}
+	else {
+		replay_inf[tid].frame_replaycnt_offset_ssn -= 0x8000;
+	}
+	/*低向高顺延更新基准replaycnt_low*/
+	for (k=0;k<=63;k++){
+		if (replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)] > 0x8000){
+			replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)] -= 0x8000;
+			if (replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)] > lowest_replay){
+				lowest_replay = replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)];
+			}
+		}
+		else {
+			
+			replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)] = lowest_replay;
+		}
+		idex++;
+	}
+}
+
+static int ccmp_tkip_replaycnt_loop_backup(struct atbm_vif *vif,struct ieee80211_mgmt *mgmt, bool is_ccmp)
+{
+	u8 pn[CCMP_PN_LEN];
+	int hdrlen = ieee80211_hdrlen(mgmt->frame_control);
+	u8 *qc = ieee80211_get_qos_ctl((struct ieee80211_hdr *)mgmt);
+	u8 tid = *qc & 0x7;//IEEE80211_QOS_CTL_TID_MASK;
+	u8 *pOldPN;
+	u8 *b_pn_init;
+	u8 pn_type = 0;
+	u16 sn = mgmt->seq_ctrl>>4;
+	unsigned short tmp_replaycnt_base_low;
+	unsigned int tmp_replaycnt_base_high;
+	int i;
+	int idex;
+	int len;
+
+	if (vif->type != NL80211_IFTYPE_STATION){
+		return 0;
+	}
+
+	ccmp_tkip_hdr2pn(pn,(u8 *)mgmt + hdrlen, is_ccmp);
+
+	tmp_replaycnt_base_low = pn[5]|(pn[4]<<8);
+	tmp_replaycnt_base_high = pn[3]|(pn[2]<<8)|(pn[1]<<16)|(pn[0]<<24);
+
+	if (is_multicast_ether_addr(mgmt->da) == 0){
+		if (ieee80211_is_data_qos(mgmt->frame_control)){
+			pOldPN = vif->ptk_pn[tid];
+			b_pn_init = &(vif->ptk_pn_init[tid]);
+			pn_type = 0;
+		}
+		else {
+			pOldPN = vif->ptk_noqos_pn;
+			b_pn_init = &(vif->ptk_noqos_pn_init);
+			pn_type = 1;
+		}
+	}
+	else {
+		pOldPN = vif->gtk_pn;
+		b_pn_init = &(vif->gtk_pn_init);
+		pn_type = 2;
+	}
+
+
+	if (*b_pn_init == 0){
+		/*新包PN小于存储的最大PN*/
+		if (memcmp(pn, pOldPN, CCMP_PN_LEN) <= 0){
+			/*QosData乱序PN检测*/
+			if (pn_type == 0){
+				goto reorder_check;
+			}
+			else {
+				/*非QosData乱序直接丢弃*/
+				goto __drop;
+			}
+		}
+		else if (pn_type == 0){
+			/*如果收到的PN比旧的存储大，则应永为新包*/
+			if (tmp_replaycnt_base_high > replay_inf[tid].frame_replaycnt_base_high){
+				replay_inf[tid].frame_replaycnt_table[sn&(BUFF_STORED_LEN-1)] = (unsigned int)tmp_replaycnt_base_low + 0x10000 - (unsigned int)replay_inf[tid].frame_replaycnt_base_low;
+			}
+			else {
+				replay_inf[tid].frame_replaycnt_table[sn&(BUFF_STORED_LEN-1)] = tmp_replaycnt_base_low - replay_inf[tid].frame_replaycnt_base_low;
+			}
+			/*如果replaycnt的offset太大容易越界,所以将replaycnt_base增大*/
+			if (replay_inf[tid].frame_replaycnt_table[sn&(BUFF_STORED_LEN-1)] > 0x9000){
+				atbm_flush_replay(sn, tid);
+			}
+			/*如果收到的是first同时replay_inf.sn_max==replay_inf.sn*/
+			if (replay_inf[tid].sn == sn){
+				replay_inf[tid].sn = (sn+1)&SEQ_NUM_MASKER;
+				replay_inf[tid].sn_max = (sn+1)&SEQ_NUM_MASKER;
+			}
+			else {
+				replay_inf[tid].frame_replaycnt_fillcnt[sn&(BUFF_STORED_LEN-1)] = 1;
+				replay_inf[tid].sn_max = sn;
+				/*如果收到的超过窗*2*/
+				if (((sn-replay_inf[tid].sn)&SEQ_NUM_MASKER)>=(BUFF_STORED_LEN*2-1)){
+					/*以新SN为最大向前减一个窗口区为最小SN*/
+					replay_inf[tid].sn = (sn-63)&SEQ_NUM_MASKER;
+					idex = replay_inf[tid].sn&(BUFF_STORED_LEN-1);
+					/*窗口区前置清空*/
+					for (i=0;i<63;i++){
+						replay_inf[tid].frame_replaycnt_fillcnt[idex&(BUFF_STORED_LEN-1)] = 0;
+						idex++;
+					}
+				}	/*如果收到的超过窗口*1*/
+				else if (((sn-replay_inf[tid].sn)&SEQ_NUM_MASKER)>=(BUFF_STORED_LEN-1)){
+					/*以新SN为最大向前减一个窗口区为最小SN*/
+					replay_inf[tid].sn = (sn-63)&SEQ_NUM_MASKER;
+					idex = replay_inf[tid].sn&(BUFF_STORED_LEN-1);
+					len = (sn-replay_inf[tid].sn)-(BUFF_STORED_LEN-1);
+					/*窗口区前置清空*/
+					for (i=0;i<len;i++){
+						idex--;
+						replay_inf[tid].frame_replaycnt_fillcnt[idex&(BUFF_STORED_LEN-1)]=0;
+					}
+					for(i=0;i<=63;i++){
+						/*填充位重置，更新最小offset_ssn*/
+						if(replay_inf[tid].frame_replaycnt_fillcnt[idex&(BUFF_STORED_LEN-1)]){
+							replay_inf[tid].frame_replaycnt_fillcnt[idex&(BUFF_STORED_LEN-1)]=0;
+							if(replay_inf[tid].frame_replaycnt_offset_ssn < replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)]){
+								//printf("[%d]change frame_replaycnt_offset_ssn %d >> %d\n",idex,replay_inf[tid].frame_replaycnt_offset_ssn , replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)]);
+								replay_inf[tid].frame_replaycnt_offset_ssn = replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)] ;
+							}
+							idex++;
+						}
+						else {
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
+	else {
+		//if first PN just update
+		*b_pn_init = 0;
+		if (pn_type == 0){
+			replay_inf[tid].frame_replaycnt_base_low = tmp_replaycnt_base_low;
+			replay_inf[tid].frame_replaycnt_base_high = tmp_replaycnt_base_high;
+			replay_inf[tid].sn = (sn+1)&SEQ_NUM_MASKER;
+			replay_inf[tid].sn_max = (sn+1)&SEQ_NUM_MASKER;
+			replay_inf[tid].frame_replaycnt_table[sn&(BUFF_STORED_LEN-1)] = 0;
+			replay_inf[tid].frame_replaycnt_offset_ssn = 0;
+			memset(replay_inf[tid].frame_replaycnt_fillcnt,0,sizeof(replay_inf[tid].frame_replaycnt_fillcnt[0])*BUFF_STORED_LEN);
+			replay_inf[tid].frame_replaycnt_fillcnt[sn&(BUFF_STORED_LEN-1)] = 1;
+		}
+	}
+	//新PN直接更新
+	memcpy(pOldPN, pn, CCMP_PN_LEN);
+	return 0;
+
+reorder_check:
+	if (pn_type == 0){
+		/*如果收到的是最小SN*/
+		if (replay_inf[tid].sn == sn){
+			replay_inf[tid].frame_replaycnt_fillcnt[sn&(BUFF_STORED_LEN-1)] = 1;
+		}
+		/*新SN超过窗口区范围*/
+		if (((replay_inf[tid].sn_max-sn)&SEQ_NUM_MASKER)>=(BUFF_STORED_LEN)){
+				atbm_printk_err("__drop 0,replay_inf.sn_max %d sn %d [%d>64]\n",replay_inf[tid].sn_max,sn,((replay_inf[tid].sn_max-sn)&SEQ_NUM_MASKER));
+				goto __drop;
+		}
+		/*新包PN比基准PN高位大，直接存储（不应该发生）*/
+		if (tmp_replaycnt_base_high > replay_inf[tid].frame_replaycnt_base_high){
+			replay_inf[tid].frame_replaycnt_table[sn&(BUFF_STORED_LEN-1)] = (unsigned int)tmp_replaycnt_base_low + 0x10000 - (unsigned int)replay_inf[tid].frame_replaycnt_base_low;
+			/*如果replaycnt的offset太大容易越界,所以将replaycnt_base增大*/
+			if (replay_inf[tid].frame_replaycnt_table[sn&(BUFF_STORED_LEN-1)] > 0x9000){
+				atbm_flush_replay(sn, tid);
+			}
+		}
+		/*新包replaycnt低位比存储窗口区最低位还小*/
+		else if(tmp_replaycnt_base_low <= replay_inf[tid].frame_replaycnt_base_low){
+			atbm_printk_err("__drop 1,replay_base_low [%d<=%d]\n",tmp_replaycnt_base_low,replay_inf[tid].frame_replaycnt_base_low);
+			goto __drop;
+		}
+		/*新包replaycnt低位offset比存储窗口区最小offset还小*/
+		else if(replay_inf[tid].frame_replaycnt_offset_ssn >= tmp_replaycnt_base_low - replay_inf[tid].frame_replaycnt_base_low){
+			atbm_printk_err("__drop 2, frame_replaycnt_offset_ssn %d >= %d,low %d\n",replay_inf[tid].frame_replaycnt_offset_ssn,tmp_replaycnt_base_low - replay_inf[tid].frame_replaycnt_base_low,replay_inf[tid].frame_replaycnt_base_low);
+			goto __drop;
+		}
+		else {
+			/*满足插入条件*/
+			unsigned short frame_replaycnt_table_tmp = tmp_replaycnt_base_low - replay_inf[tid].frame_replaycnt_base_low;
+			if (replay_inf[tid].frame_replaycnt_table[sn&(BUFF_STORED_LEN-1)] >= frame_replaycnt_table_tmp){
+				atbm_printk_err("__drop 3,frame_replaycnt_table [%d<=%d]\n",frame_replaycnt_table_tmp,replay_inf[tid].frame_replaycnt_table[sn&(BUFF_STORED_LEN-1)]);
+				goto __drop;
+			}
+			replay_inf[tid].frame_replaycnt_table[sn&(BUFF_STORED_LEN-1)] = frame_replaycnt_table_tmp;
+		}
+		/*遍历SN低窗口区，检测replaycnt_table_low*/
+		{
+			idex = replay_inf[tid].sn&(BUFF_STORED_LEN-1);
+			for (i=0;i<=63;i++){
+				if((idex&(BUFF_STORED_LEN-1)) != (sn&(BUFF_STORED_LEN-1))){
+					if (replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)] >= replay_inf[tid].frame_replaycnt_table[sn&(BUFF_STORED_LEN-1)]){
+						atbm_printk_err("__drop 4, repalycnt loop window error [%d<=%d]\n",replay_inf[tid].frame_replaycnt_table[sn&(BUFF_STORED_LEN-1)],replay_inf[tid].frame_replaycnt_table[idex&(BUFF_STORED_LEN-1)]);
+						goto __drop;
+					}
+					idex++;
+				}
+				else {
+					break;
+				}
+			}
+		}
+		/*如果收到的是最小SN，遍历释放已存储低位SN存储区*/
+		if (replay_inf[tid].sn == sn){
+			idex = replay_inf[tid].sn&(BUFF_STORED_LEN-1);
+			for (i=0;i<=63;i++){
+				if (replay_inf[tid].frame_replaycnt_fillcnt[idex&(BUFF_STORED_LEN-1)]){
+					replay_inf[tid].frame_replaycnt_fillcnt[idex&(BUFF_STORED_LEN-1)] = 0;
+					replay_inf[tid].sn = (replay_inf[tid].sn+1)&SEQ_NUM_MASKER;
+					idex++;
+				}
+				else {
+					break;
+				}
+			}
+		}
+	}
+
+	return 0;
+
+__drop:
+	atbm_printk_err("[RX Drop pn_type %d]sn=%d ccmp_replaycnt drop %x:%x:%x:%x:%x:%x > %x:%x:%x:%x:%x:%x \n",pn_type,sn
+										,pOldPN[0]
+										,pOldPN[1]
+										,pOldPN[2]
+										,pOldPN[3]
+										,pOldPN[4]
+										,pOldPN[5]
+										,pn[0]
+										,pn[1]
+										,pn[2]
+										,pn[3]
+										,pn[4]
+										,pn[5]);
+	atbm_printk_err("id _mul %d\n",is_multicast_ether_addr(mgmt->da));
+	return -1;
+}
+
+#define USE_LOOP_BACKUP_REPLAYCNT 0
 static int ccmp_tkip_replaycnt(struct atbm_vif *vif, struct ieee80211_mgmt *mgmt, bool is_ccmp)
 {
 	u8 pn[CCMP_PN_LEN];
 	static const u8 zero_pn[CCMP_PN_LEN]= {0};
 	int hdrlen = ieee80211_hdrlen(mgmt->frame_control);
+	u8 *qc = ieee80211_get_qos_ctl((struct ieee80211_hdr *)mgmt);
+	u8 tid = *qc & 0x7;//IEEE80211_QOS_CTL_TID_MASK;
 	u8 *pOldPN;
 	u8 *b_pn_init;
+
+	if (USE_LOOP_BACKUP_REPLAYCNT){
+		return ccmp_tkip_replaycnt_loop_backup(vif, mgmt, is_ccmp);
+	}
 
 	if (vif->type != NL80211_IFTYPE_STATION){
 		return 0;
@@ -591,8 +879,8 @@ static int ccmp_tkip_replaycnt(struct atbm_vif *vif, struct ieee80211_mgmt *mgmt
 
 	if (is_multicast_ether_addr(mgmt->da) == 0){
 		if (ieee80211_is_data_qos(mgmt->frame_control)){
-			pOldPN = vif->ptk_pn;
-			b_pn_init = &(vif->ptk_pn_init);
+			pOldPN = vif->ptk_pn[tid];
+			b_pn_init = &(vif->ptk_pn_init[tid]);
 		}
 		else {
 			pOldPN = vif->ptk_noqos_pn;
@@ -1491,7 +1779,7 @@ static void __ieee80211_rx_handle_packet(struct atbm_vif *vif,
 	rx.sta = sta_info_get_rx(vif,hdr->addr2);
 
 	if(rx.sta == NULL){
-		//atbm_printk_err("%s: mac[%pM] not associate\n",__func__,hdr->addr2);
+		atbm_printk_err("%s: mac[%pM] not associate\n",__func__,hdr->addr2);
 	}
 
 	if(ieee80211_prepare_and_rx_handle(&rx,skb,true) == true)

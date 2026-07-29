@@ -32,8 +32,7 @@
 #include <linux/freezer.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
-#include <mach/jzmmc.h>
-//#include <soc/mmc.h>
+//#include "soc/mmc.h"
 #endif
 
 
@@ -61,8 +60,8 @@ static void atbm_sdio_release_err_cmd(struct atbm_common	*hw_priv);
 static void atbm_sdio_lock(struct sbus_priv *self);
 static void atbm_sdio_unlock(struct sbus_priv *self);
 
-const char DRIVER_INFO[]={"[====="__DATE__" "__TIME__"""=====]"};
-//const char DRIVER_INFO[]={"[====="" """"=====]"};
+//const char DRIVER_INFO[]={"[====="__DATE__" "__TIME__"""=====]"};
+const char DRIVER_INFO[]={"[==2022/9/26==="" """"=====]"};
 static int driver_build_info(void)
 {
 	struct build_info build;
@@ -138,6 +137,9 @@ static const struct sdio_device_id atbm_sdio_ids[] = {
 	{ /* end: all zeroes */			},
 };
 
+extern struct atbm_common *g_hw_priv;
+extern int is_pre_rmmod;
+
 static int  atbm_sdio_init(void);
 static void  atbm_sdio_exit(void);
 extern 	int atbm_plat_request_gpio_irq(const struct atbm_platform_data *pdata,struct sbus_priv *self,int * atbm_bgf_irq);
@@ -148,6 +150,9 @@ extern void atbm_sdio_tx_bh(struct atbm_common *hw_priv);
 extern int atbm_bh_read_ctrl_reg(struct atbm_common *hw_priv,
 					  u16 *ctrl_reg);
 static void atbm_sdio_miss_irq(struct sbus_priv *self);
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+extern void atbm_sdio_tx_atcmd(struct atbm_common *hw_priv);
+#endif
 
 static struct sbus_wtd         g_wtd={
 	.wtd_init  = 0,
@@ -326,6 +331,10 @@ static int atbm_sdio_rx_pre_sched(struct atbm_sdio_thread *thread)
 	struct sbus_priv *self = (struct sbus_priv *)thread->self;
 	struct atbm_common *hw_priv = self->core;
 	#ifdef LINUX_OS
+
+	if (is_pre_rmmod && (hw_priv->wsm_caps.firmwareVersion>=13549)){
+		return ret;
+	}
 	hw_priv->sbus_ops->lock(hw_priv->sbus_priv);
 	atbm_bh_read_ctrl_reg_unlock(hw_priv, &ctrl_reg);
 	
@@ -366,12 +375,19 @@ static int atbm_sdio_rx_thread(void *priv)
 	/*
 	*the policy of the sheduler is same with the sdio irq thread
 	*/
-	sched_setscheduler(current, SCHED_FIFO, &param);
-
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(5, 9, 0))
+		sched_set_fifo(current);
+#else
+		sched_setscheduler(current, SCHED_FIFO, &param);
+#endif
+	
 	while(!atbm_sdio_wait_action(&self->rx_thread)){
 		#ifndef LINUX_OS
-		process_wait_timeout(&self->rx_wake, msecs_to_jiffies(30));
-		if (!atomic_xchg(&self->rx_get, 0)){
+		process_wait_timeout(&self->rx_wake, msecs_to_jiffies(10001));//too smaal will block tshell
+		//if (!atomic_xchg(&self->rx_get, 0)){
+		//	continue;
+		//}
+		if (self->core->init_done != 1){
 			continue;
 		}
 		#endif
@@ -395,19 +411,27 @@ static int atbm_sdio_tx_thread(void *priv)
 {
 	struct sbus_priv *self = (struct sbus_priv *)priv;
 #ifdef CONFIG_ATBM_SDIO_SMP
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0))
 	struct sched_param param = { .sched_priority = 1 };
+#endif 
 #else
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0))
 	struct sched_param param = { .sched_priority = 2 };
 #endif
+#endif
+
 	atbm_printk_init("%s\n",__func__);
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(5, 9, 0))
+	sched_set_fifo(current);
+#else
 	sched_setscheduler(current, SCHED_FIFO, &param);
-		
+#endif		
 	while(!atbm_sdio_wait_action(&self->tx_thread)){
 		#ifndef LINUX_OS
 		process_wait_timeout(&self->tx_wake, HZ);
-		if (!atomic_xchg(&self->tx_get, 0)){
-			continue;
-		}
+		//if (!atomic_xchg(&self->tx_get, 0)){
+		//	continue;
+		//}
 		#endif
 #ifdef CONFIG_ATBM_SDIO_TX_HOLD	
 		atbm_sdio_lock(self);
@@ -445,18 +469,18 @@ static int atbm_sdio_thread_init(struct atbm_sdio_thread *thread)
 }
 
 #ifdef LINUX_OS
-struct rcu_synchronize {
+static struct rcu_synchronize_atbm {
 	struct rcu_head head;
 	struct completion completion;
-};
+}atbm_rcu;
 
-static struct rcu_synchronize atbm_rcu;
+//static struct rcu_synchronize_atbm atbm_rcu;
 
-/*static*/ void wakeme_after_rcu(struct rcu_head *head)
+static void wakeme_after_rcu_atbm(struct rcu_head *head)
 {
-	struct rcu_synchronize *rcu;
+	struct rcu_synchronize_atbm *rcu;
 
-	rcu = container_of(head, struct rcu_synchronize, head);
+	rcu = container_of(head, struct rcu_synchronize_atbm, head);
 	complete(&rcu->completion);
 }
 
@@ -467,7 +491,7 @@ static void asynchronize_rcu(void)
 	if (init_cnt){
 		init_rcu_head_on_stack(&atbm_rcu.head);
 		init_completion(&atbm_rcu.completion);
-		call_rcu(&atbm_rcu.head, wakeme_after_rcu);
+		call_rcu(&atbm_rcu.head, wakeme_after_rcu_atbm);
 	}
 	init_cnt++;
 }
@@ -651,6 +675,9 @@ static int atbm_sdio_memcpy_fromio(struct sbus_priv *self,
 				     unsigned int addr,
 				     void *dst, int count)
 {
+	if(is_pre_rmmod && (self->core->wsm_caps.firmwareVersion>=13549)){
+		return -1;
+	}
 	return sdio_memcpy_fromio(self->func, dst, addr, count);
 }
 
@@ -658,29 +685,24 @@ static int atbm_sdio_memcpy_toio(struct sbus_priv *self,
 				   unsigned int addr,
 				   const void *src, int count)
 {
+	if(is_pre_rmmod && (self->core->wsm_caps.firmwareVersion>=13549)){
+		return -1;
+	}
 	return sdio_memcpy_toio(self->func, addr, (void *)src, count);
 }
 
-
-int atbm_readb_func0(struct sbus_priv *self,
-						 unsigned int addr,int *ret_err)
+int atbm_sdio_memcpy_fromio_for_sleep(struct sbus_priv *self,
+				     unsigned int addr,
+				     void *dst, int count)
 {
-	u8 data;
-	sdio_claim_host(self->func);
-	data = sdio_f0_readb(self->func,addr,ret_err);
-	sdio_release_host(self->func);
-	return data;
+	return sdio_memcpy_fromio(self->func, dst, addr, count);
 }
 
-int atbm_writeb_func0(struct sbus_priv *self,
-						 unsigned int addr,u8 data)
+int atbm_sdio_memcpy_toio_for_sleep(struct sbus_priv *self,
+				   unsigned int addr,
+				   const void *src, int count)
 {
-	int ret_err;
-	sdio_claim_host(self->func);
-	//data = sdio_f0_writeb(self->func,addr,ret_err);
-	sdio_f0_writeb(self->func, data, addr, &ret_err);
-	sdio_release_host(self->func);
-	return ret_err;
+	return sdio_memcpy_toio(self->func, addr, (void *)src, count);
 }
 
 static void atbm_sdio_lock(struct sbus_priv *self)
@@ -699,6 +721,9 @@ static void atbm_sdio_irq_handler(struct sdio_func *func)
 
 	BUG_ON(!self);
 
+	if (is_pre_rmmod && (self->core->wsm_caps.firmwareVersion>=13549)){
+		return ;
+	}
 	if (self->irq_handler)
 		self->irq_handler(self->irq_priv);
 }
@@ -927,10 +952,16 @@ static int atbm_detect_card(const struct atbm_platform_data *pdata)
 					pdata->mmc_id))
 				continue;
 
-			if(host->card == NULL){
-				jzmmc_manual_detect(1,1);
-				//mmc_detect_change(host, 10);
-			}
+			if(host->card == NULL)
+			{
+				#if (ATBM_WIFI_PLATFORM == PLATFORM_INGENIC_T31)
+			 	    extern int jzmmc_manual_detect(int index, int on);
+					jzmmc_manual_detect(1,1);
+				#else
+					printk("mmc detect change\n");
+					mmc_detect_change(host, 10);
+				#endif
+		    }
 			else
 				atbm_printk_err("%s has been attached\n",pdata->mmc_id);
 			break;
@@ -964,8 +995,10 @@ static int atbm_sdio_on(const struct atbm_platform_data *pdata)
 	int ret = 0;
     if (pdata->insert_ctrl)
 		ret = pdata->insert_ctrl(pdata, true);
+#if (ATBM_WIFI_PLATFORM != PLATFORM_XM)
 	msleep(200);
-	atbm_detect_card(pdata);
+//	atbm_detect_card(pdata);
+#endif
 	return ret;
 }
 #endif //#if ((ATBM_WIFI_PLATFORM != 10) && (ATBM_WIFI_PLATFORM != PLATFORM_AMLOGIC_S805))
@@ -1163,7 +1196,7 @@ static struct sbus_ops atbm_sdio_sbus_ops = {
 	.power_mgmt			= atbm_sdio_pm,
 	.set_block_size		= atbm_sdio_set_block_size,
 	.wtd_wakeup			= atbm_wtd_wakeup,
-	.sbus_reset_chip    = atbm_sdio_reset_chip,
+	.sbus_reset_chip    = NULL, /* atbm_sdio_reset_chip - disabled to prevent infinite loop */
 	.abort				= atbm_cmd52_abort,
 	.lmac_restart   	= atbm_sdio_lmac_restart,
 	//.sbus_cmd52_fromio =atbm_cmd52_fromio,
@@ -1311,13 +1344,19 @@ static void atbm_sdio_disconnect(struct sdio_func *func)
 		
 		if (self->core) {
 			atbm_core_release(self->core);
+#if (ATBM_WIFI_PLATFORM != PLATFORM_XM)
 			self->core = NULL;
+#endif
 		}
 
 		sdio_claim_host(func);
 		atbm_sdio_disable_func(func);
 		sdio_release_host(func);
 		atbm_sdio_set_drvdata(func, NULL);
+#if (ATBM_WIFI_PLATFORM == PLATFORM_XM)
+		atbm_sdio_irq_unsubscribe(self->core->sbus_priv);
+		self->core = NULL;
+#endif
 		atbm_kfree(self);
 		#ifdef TIME_DEBUG
 		jiffies_update(0);
@@ -1407,6 +1446,21 @@ static int atbm_reboot_notifier(struct notifier_block *nb,
 	atbm_printk_exit("atbm_reboot_notifier\n");
 	atomic_set(&g_wtd.wtd_term, 1);
 	atomic_set(&g_wtd.wtd_run, 0);
+	/* The MCU sends HI_SDIO_StartUp_Indication only once, at its own boot,
+	 * so a host-only reboot always leaves the next probe without a WSM
+	 * startup indication (stale session -> wsm_seq mismatch, HIF HW ERR).
+	 * On restart the MCU must reboot with us: WSM_FORCE_REBOOT (0x003C)
+	 * cold-starts the MCU (which also resets the SoC on this board).
+	 * On halt/poweroff keep the stock notify+fw_sleep battery behavior. */
+	if (g_hw_priv && g_hw_priv->wsm_caps.firmwareVersion) {
+		if (action == SYS_RESTART) {
+			atbm_wsm_force_reboot(g_hw_priv);
+		} else {
+			atbm_wsm_host_reboot_notify(g_hw_priv);
+			if (g_hw_priv->wsm_caps.firmwareVersion >= 13549)
+				atbm_wsm_fw_sleep(g_hw_priv);
+		}
+	}
 	atbm_sdio_exit();
 	//atbm_ieee80211_exit();
 	atbm_release_firmware();

@@ -135,6 +135,10 @@ int atbm_reg_read(struct atbm_common *hw_priv, u16 addr,
 		    void *buf, u32 buf_len);
 int atbm_reg_write(struct atbm_common *hw_priv, u16 addr,
 		     const void *buf, u32 buf_len);
+int atbm_reg_read_for_sleep(struct atbm_common *hw_priv, u16 addr, void *buf,
+			u32 buf_len);
+int atbm_reg_write_for_sleep(struct atbm_common *hw_priv, u16 addr, const void *buf,
+			u32 buf_len);
 int atbm_reg_read_unlock(struct atbm_common *hw_priv, u16 addr,
 		    void *buf, u32 buf_len);
 int atbm_reg_write_unlock(struct atbm_common *hw_priv, u16 addr,
@@ -167,6 +171,17 @@ static inline int atbm_reg_read_16(struct atbm_common *hw_priv,
 	*val = (u16)bigVal;
 	return ret;
 }
+
+static inline int atbm_reg_read_16_for_sleep(struct atbm_common *hw_priv,
+				     u16 addr, u16 *val)
+{
+	u32 bigVal;
+	int ret;
+	ret = atbm_reg_read_for_sleep(hw_priv, addr, &bigVal, sizeof(bigVal));
+	*val = (u16)bigVal;
+	return ret;
+}
+
 static inline int atbm_reg_read_16_unlock(struct atbm_common *hw_priv,
 				     u16 addr, u16 *val)
 {
@@ -182,6 +197,13 @@ static inline int atbm_reg_write_16(struct atbm_common *hw_priv,
 {
 	u32 bigVal = (u32)val;
 	return atbm_reg_write(hw_priv, addr, &bigVal, sizeof(bigVal));
+}
+
+static inline int atbm_reg_write_16_for_sleep(struct atbm_common *hw_priv,
+				      u16 addr, u16 val)
+{
+	u32 bigVal = (u32)val;
+	return atbm_reg_write_for_sleep(hw_priv, addr, &bigVal, sizeof(bigVal));
 }
 
 static inline int atbm_reg_read_32(struct atbm_common *hw_priv,

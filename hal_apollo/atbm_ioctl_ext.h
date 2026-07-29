@@ -1,7 +1,7 @@
 #ifndef ATBM_IOCTL_EXT_H
 #define ATBM_IOCTL_EXT_H
 
-#define PRIV_VERSION  "2021-0929-1930"
+#define PRIV_VERSION  "2022-0923-0945"
 
 #define ATBM_IOCTL          (121)
 
@@ -58,6 +58,12 @@
 #define ATBM_CUSTOMER_CMD         _IOW(ATBM_IOCTL,50, unsigned int)
 #define ATBM_CUSTOMER_CERT        _IOW(ATBM_IOCTL,51, unsigned int)
 #define ATBM_CHECK_ALIVE          _IOW(ATBM_IOCTL,52, unsigned int)
+#define ATBM_DIRECT_BUFFER        _IOWR(ATBM_IOCTL,53, unsigned int)
+#define ATBM_CONTROL_DEBUG        _IOW(ATBM_IOCTL,54, unsigned int)
+#define ATBM_FORCE_REBOOT         _IO(ATBM_IOCTL, 55)
+#define ATBM_AT_CMD_DIRECT        _IOW(ATBM_IOCTL,56, unsigned int)
+#define ATBM_FAST_CFG_RECV        _IOW(ATBM_IOCTL,57, unsigned int)
+#define ATBM_FAST_CFG_SEND        _IOW(ATBM_IOCTL,58, unsigned int)
 
 #endif /* ATBM_IOCTL_EXT_H */
 

@@ -36,6 +36,10 @@ enum atbm_rx_frame_type{
 };
 //#include "bh_usb.h"
 
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+void atbm_sdio_atcmd_buf_init(struct atbm_common *hw_priv);
+#endif
+
 int atbm_register_bh(struct atbm_common *hw_priv);
 void atbm_unregister_bh(struct atbm_common *hw_priv);
 void atbm_irq_handler(struct atbm_common *hw_priv);

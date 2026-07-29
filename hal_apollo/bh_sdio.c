@@ -61,6 +61,8 @@ int atbm_register_bh(struct atbm_common *hw_priv)
 {
 	return 0;
 }
+
+/*
 static void atbm_hw_buff_reset(struct atbm_common *hw_priv)
 {
 	hw_priv->wsm_tx_seq = 0;
@@ -69,6 +71,7 @@ static void atbm_hw_buff_reset(struct atbm_common *hw_priv)
 	hw_priv->hw_bufs_used = 0;
 	hw_priv->buf_id_rx = 0;
 }
+*/
 
 void atbm_unregister_bh(struct atbm_common *hw_priv)
 {
@@ -90,13 +93,14 @@ static int atbm_rx_directly(struct atbm_common *hw_priv,struct sk_buff *skb)
 		hw_priv->wsm_rx_seq = (wsm_seq + 1) & 7;
 		rx_resync = 0;
 		recv_cnt++;
+		atbm_control_dbg(ATBM_CONTROL_DEBUG_RX, "%s drop first 4 packets!\n", __func__); 
 	}
 	else {
 		data = skb->data;
 		wsm = (struct wsm_hdr *)data;
 		
 		wsm_len = __le32_to_cpu(wsm->len);
-		wsm_id  = __le32_to_cpu(wsm->id) & 0xFFF;
+		wsm_id  = __le32_to_cpu(wsm->id) & 0x1FFF;
 		wsm_seq = (__le32_to_cpu(wsm->id) >> 13) & 7;
 		
 		atbm_skb_trim(skb, wsm_len);
@@ -278,7 +282,7 @@ static bool atbm_sdio_have_enough_space(struct atbm_common	*hw_priv,u32 n_needs)
 			atbm_printk_err("n_xmits %x|%x,hw_xmited %x numInpChBufs %d (hw_xmited-n_xmits) %d\n",hw_priv->n_xmits,n_xmits,hw_xmited, hw_priv->wsm_caps.numInpChBufs,(hw_xmited-n_xmits));
 		}
 		BUG_ON((int)(hw_xmited-n_xmits) > hw_priv->wsm_caps.numInpChBufs);
-		hw_priv->hw_xmits = hw_xmited;
+		//hw_priv->hw_xmits = hw_xmited;
 		hw_priv->hw_bufs_free = (int)( hw_xmited - (n_xmits));
 		hw_priv->hw_bufs_free_init = hw_priv->hw_bufs_free;
 		enough = hw_priv->hw_bufs_free >= n_needs ? true : false;
@@ -305,6 +309,8 @@ static bool atbm_sdio_wait_enough_space(struct atbm_common	*hw_priv,u32 n_needs)
 		enough=atbm_sdio_have_enough_space(hw_priv,n_needs);
 		if(enough == false){
 			loop ++;
+			if (hw_priv->close_driver)
+				break;
 			if(loop>=MAX_LOOP_POLL_CNT)
 				break;
 			if((loop >= 3)&&(print == 0)){			
@@ -355,6 +361,9 @@ static void atbm_sdio_force_free_wsm(struct atbm_common	*hw_priv,struct wsm_tx *
 		break;
 	}
 }
+
+extern int is_pre_rmmod;
+
 void atbm_sdio_tx_bh(struct atbm_common *hw_priv)
 {
 #ifdef  ATBM_WSM_SDIO_TX_MULT
@@ -389,7 +398,20 @@ void atbm_sdio_tx_bh(struct atbm_common *hw_priv)
 #endif	//	(PROJ_TYPE==ARES_A)	
 	bool enough = false;
 	struct sk_buff *skb = NULL;
+	atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, "%s enter...\n", __func__);
 xmit_continue:
+	if (hw_priv->close_driver){
+		while((skb = atbm_skb_dequeue(&hw_priv->tx_frame_queue)) != NULL){
+			//printk("free tx skb: %x\n", skb);
+			atbm_dev_kfree_skb(skb);
+		}
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+		hw_priv->at_cmd_put = 0;
+		hw_priv->at_cmd_get = 0;		
+#endif
+		atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, "%s prepare close tx thread...\n", __func__);
+		goto xmit_finished;
+	}
 
 	txMutiFrameCount = 0;
 	hw_priv->xmit_buff_put = 0;
@@ -412,6 +434,24 @@ xmit_continue:
 				break;
 			else
 				goto xmit_finished;
+		}
+
+		if (is_pre_rmmod){
+			if (data != hw_priv->wsm_cmd.ptr){
+				if(skb != NULL){
+					atbm_dev_kfree_skb(skb);
+					while((skb = atbm_skb_dequeue(&hw_priv->tx_frame_queue)) != NULL){
+						//printk("prermmod free tx skb: %x\n", skb);
+						atbm_dev_kfree_skb(skb);
+					}
+				}
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+				hw_priv->at_cmd_put = 0;
+				hw_priv->at_cmd_get = 0;				
+#endif
+				atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, "%s prepare close tx thread, release tx packets...\n", __func__);
+				goto xmit_finished;
+			}
 		}
 		
 		txMutiFrameCount++;
@@ -447,7 +487,7 @@ xmit_continue:
 			atbm_printk_err("Write aligned len:"
 			" %d\n", tx_len);
 		}
-		
+		atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, "%s wsm_tx id:[0x%x]\n", __func__, wsm_tx->id);
 		wsm_tx->id &= __cpu_to_le32(~WSM_TX_SEQ(WSM_TX_SEQ_MAX));
 		wsm_tx->id |= cpu_to_le32(WSM_TX_SEQ(hw_priv->wsm_tx_seq));
 #ifdef  ATBM_WSM_SDIO_TX_MULT
@@ -461,17 +501,15 @@ xmit_continue:
 		hw_priv->hw_bufs_free--;		
 		ATBM_SDIO_FREE_BUFF_ERR(hw_priv->hw_bufs_free < 0,hw_priv->hw_bufs_free,hw_priv->hw_bufs_free_init,hw_priv->n_xmits,hw_priv->hw_xmits);
 
-		
 		atbm_xmit_linearize(hw_priv,(struct wsm_tx *)data,&hw_priv->xmit_buff[hw_priv->xmit_buff_put],wsm_tx->len,skb);
 		hw_priv->xmit_buff_put += tx_len;
 		hw_priv->wsm_tx_seq = (hw_priv->wsm_tx_seq + 1) & WSM_TX_SEQ_MAX;
 
-		
 		if(wsm_txed(hw_priv, data)){
 			need_confirm = data;
 			atbm_printk_always("%s:cmd free(%d),used(%d)\n",__func__,hw_priv->hw_bufs_free,hw_priv->hw_bufs_used);
 			break;
-		}else {
+		}else if(skb != NULL){
 			need_confirm = NULL;
 			#if (ATBM_WIFI_PLATFORM == PLATFORM_ANKAI_RTOS)
 			spin_lock_irqsave(&hw_priv->tx_queue_lock, 0);
@@ -486,7 +524,9 @@ xmit_continue:
 				#else
 				spin_unlock_bh(&hw_priv->tx_queue_lock);
 				#endif
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 				netif_tx_wake_all_queues(hw_priv->vif_list[0]->ndev);
+#endif
 				#if (ATBM_WIFI_PLATFORM == PLATFORM_ANKAI_RTOS)
 				spin_lock_irqsave(&hw_priv->tx_queue_lock, 0);
 				#else
@@ -502,14 +542,31 @@ xmit_continue:
 			wsm_release_tx_buffer(hw_priv,1);
 			hw_priv->wsm_txframe_num++;
 		}
-		
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+		else{
+			need_confirm = NULL;
+#if (ATBM_WIFI_PLATFORM == PLATFORM_ANKAI_RTOS)
+			spin_lock_irqsave(&hw_priv->tx_queue_lock, 0);
+#else
+			spin_lock_bh(&hw_priv->tx_queue_lock);
+#endif
+			hw_priv->at_cmd_get ++;
+#if (ATBM_WIFI_PLATFORM == PLATFORM_ANKAI_RTOS)
+			spin_unlock_irqrestore(&hw_priv->tx_queue_lock, 0);
+#else
+			spin_unlock_bh(&hw_priv->tx_queue_lock);
+#endif
+			//atbm_printk_always("%s: free tx buff\n",__func__);
+			wsm_release_tx_buffer(hw_priv,1);
+			hw_priv->wsm_txframe_num++;
+		}
+#endif	
 		if (hw_priv->xmit_buff_put+hw_priv->wsm_caps.sizeInpChBuf>SDIO_TX_MAXLEN){
 			break;
 		}
 	}while(loop);
 	BUG_ON(hw_priv->xmit_buff_put == 0);
 	hw_priv->buf_id_offset = txMutiFrameCount;
-
 	
 #ifdef CONFIG_ATBM_SDIO_TX_HOLD	
 	if (WARN_ON(atbm_data_write_unlock(hw_priv,hw_priv->xmit_buff, hw_priv->xmit_buff_put))) {		
@@ -530,7 +587,8 @@ xmit_wait:
 	
 	goto xmit_continue;
 	
-xmit_finished:	
+xmit_finished:
+	atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, "%s exit...\n", __func__);
 	return;
 xmit_err:
 	atbm_sdio_force_free_wsm(hw_priv,(struct wsm_tx *)need_confirm);
@@ -540,7 +598,7 @@ xmit_err:
 void atbm_sdio_rx_bh(struct atbm_common *hw_priv)
 {
 	static bool hard_irq = true;
-	
+	atbm_control_dbg(ATBM_CONTROL_DEBUG_RX, "%s enter...\n", __func__); 
 	if(hw_priv->hard_irq == false){
 #ifdef CONFIG_SDIO_IRQ_THREAD_PROCESS_DATA	
 		/*
@@ -581,6 +639,7 @@ restart:
 			goto restart;
 		hw_priv->bh_running = false;
 		spin_unlock_bh(&hw_priv->rx_frame_queue.lock);
+		atbm_control_dbg(ATBM_CONTROL_DEBUG_RX, "%s exit1...\n", __func__);
 		return;
 #endif
 	}else {
@@ -589,7 +648,22 @@ restart:
 	hw_priv->sbus_ops->lock(hw_priv->sbus_priv);
 	atbm_sdio_process_read_data(hw_priv,atbm_bh_read_ctrl_reg,atbm_data_read,atbm_rx_directly,ATBM_RX_DERICTLY_DATA_FRAME);	
 	hw_priv->sbus_ops->unlock(hw_priv->sbus_priv);
+	atbm_control_dbg(ATBM_CONTROL_DEBUG_RX, "%s exit...\n", __func__);
 }
+
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+void atbm_sdio_atcmd_buf_init(struct atbm_common *hw_priv)
+{
+	int i;
+	
+	for(i=0; i<ATBM_AT_CMD_MAX_SW_CACHE; i++){
+		hw_priv->at_cmd_buf[i] = atbm_kzalloc(MAX_WSM_BUF_LEN, GFP_KERNEL | GFP_DMA);
+		BUG_ON(hw_priv->at_cmd_buf[i] == NULL);
+	}
+	hw_priv->at_cmd_get = 0;
+	hw_priv->at_cmd_put = 0;
+}
+#endif
 
 void atbm_irq_handler(struct atbm_common *hw_priv)
 {
@@ -724,10 +798,15 @@ void atbm_put_skb(struct atbm_common *hw_priv, struct sk_buff *skb)
 		hw_priv->skb_cache = skb;
 }
 
+extern int is_pre_rmmod;
+
 int atbm_bh_read_ctrl_reg(struct atbm_common *hw_priv,
 					  u16 *ctrl_reg)
 {
 	int ret=0,retry=0;
+	if (is_pre_rmmod && (hw_priv->wsm_caps.firmwareVersion>=13549)){
+		return 0;
+	}
 	while (retry <= MAX_RETRY) {
 		ret = atbm_reg_read_16(hw_priv,
 				ATBM_HIFREG_CONTROL_REG_ID, ctrl_reg);
@@ -744,10 +823,14 @@ int atbm_bh_read_ctrl_reg(struct atbm_common *hw_priv,
 	}
 	return ret;
 }
+
 int atbm_bh_read_ctrl_reg_unlock(struct atbm_common *hw_priv,
 					  u16 *ctrl_reg)
 {
 	int ret=0,retry=0;
+	if (is_pre_rmmod && (hw_priv->wsm_caps.firmwareVersion>=13549)){
+		return 0;
+	}
 	while (retry <= MAX_RETRY) {
 		ret = atbm_reg_read_16_unlock(hw_priv,
 				ATBM_HIFREG_CONTROL_REG_ID, ctrl_reg);
@@ -807,7 +890,7 @@ int atbm_rx_tasklet(struct atbm_common *hw_priv, int id,
 #define RX_ALLOC_BUFF_OFFLOAD (  (40+16)/*RX_DESC_OVERHEAD*/ -16 /*WSM_HI_RX_IND*/)
 
 		wsm_len = __le32_to_cpu(wsm->len);
-		wsm_id	= __le32_to_cpu(wsm->id) & 0xFFF;
+		wsm_id	= __le32_to_cpu(wsm->id) & 0x1FFF;
 		if((wsm_id == WSM_MULTI_RECEIVE_INDICATION_ID)||
 			(WSM_SINGLE_CHANNEL_MULTI_RECEIVE_INDICATION_ID == wsm_id)){
 			struct wsm_multi_rx *  multi_rx = (struct wsm_multi_rx *)skb->data;			
@@ -823,7 +906,7 @@ int atbm_rx_tasklet(struct atbm_common *hw_priv, int id,
 			rxMutiCnt_Num+=RxFrameNum;
 			wsm = (struct wsm_hdr *)(multi_rx+1);
 			wsm_len = __le32_to_cpu(wsm->len);
-			wsm_id	= __le32_to_cpu(wsm->id) & 0xFFF;
+			wsm_id	= __le32_to_cpu(wsm->id) & 0x1FFF;
 			
 			//frame_hexdump("dump sdio wsm rx ->",wsm,32);
 			do {
@@ -861,7 +944,7 @@ int atbm_rx_tasklet(struct atbm_common *hw_priv, int id,
 				wsm = (struct wsm_hdr *)((u8 *)wsm +ALIGN2(( wsm_len + RX_ALLOC_BUFF_OFFLOAD),4));
 				#endif
 				wsm_len = __le32_to_cpu(wsm->len);
-				wsm_id	= __le32_to_cpu(wsm->id) & 0xFFF;
+				wsm_id	= __le32_to_cpu(wsm->id) & 0x1FFF;
 				
 				if(atbm_skb_copy != NULL){
 					atbm_dev_kfree_skb(atbm_skb_copy);

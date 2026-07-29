@@ -42,7 +42,13 @@ atbm_dev_to_vif(struct net_device *dev)
 /* Required encryption head and tailroom */
 #define IEEE80211_ENCRYPT_HEADROOM 20
 #define IEEE80211_ENCRYPT_TAILROOM 18
+
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 int atbm_netdev_add(struct atbm_common *hw_priv,const char *name);
+#else
+int atbm_netdev_none(struct atbm_common *hw_priv);
+#endif
+
 void atbm_remove_interfaces(struct atbm_common *hw_priv);
 void ieee80211_send_auth(struct        atbm_vif *vif,
 			 u16 transaction, u16 auth_alg,

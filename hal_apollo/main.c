@@ -74,7 +74,7 @@ extern int wifi_run_sta;
 module_param(wifi_run_sta, int, 0644);
 static int efuse = 0;
 module_param(efuse, int, 0644);
-static int driver_ver = DRIVER_VER;
+static int driver_ver =DRIVER_VER;
 module_param(driver_ver, int, 0644);
 static int fw_ver = 0;
 module_param(fw_ver, int, 0644);
@@ -157,7 +157,8 @@ void atbm_event_handler(struct work_struct *work)
 			&& (event->evt.eventId != WSM_EVENT_HOST_INSMOD)
 			&& (event->evt.eventId != WSM_EVENT_HOST_WAKEUP_REASON)
 			&& (event->evt.eventId != WSM_EVENT_HOST_DISCONN_REASON)
-			&& (event->evt.eventId != WSM_EVENT_HOST_CONN_ERR_REASON)){
+			&& (event->evt.eventId != WSM_EVENT_HOST_CONN_ERR_REASON)
+			&& (event->evt.eventId != WSM_EVENT_ATCMD_RECIVE)){
 			priv = __ABwifi_hwpriv_to_vifpriv(hw_priv, event->if_id);
 			if (!priv) {
 				printk( "[CQM] Event for non existing interface, ignoring.\n");
@@ -173,9 +174,11 @@ void atbm_event_handler(struct work_struct *work)
 			{
 				struct HostDisConnectEvent * hostevent = (struct HostDisConnectEvent *)event->evt.buffer;
 				atbm_ioctl_connect_async(NULL, 0);
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 				if (priv->type == NL80211_IFTYPE_STATION){
 					atbm_sta_disconnect_event(priv,hostevent->bssid);
 				}
+#endif
 				break;
 			}
 			case WSM_EVENT_BSS_CONNECT:
@@ -184,7 +187,8 @@ void atbm_event_handler(struct work_struct *work)
 
 				printk( "hostevent->bssid %pM ipaddr %x\n",hostevent->bssid,hostevent->ipaddr);
 				atbm_ioctl_connect_async(hostevent, 1);
-				if (priv->type == NL80211_IFTYPE_STATION){
+#ifndef CONFIG_ATBM_SDIO_ATCMD
+				if ((priv->type == NL80211_IFTYPE_STATION) && !(hostevent->connect_flag&BIT(1))){//6441 BIT1 notify ap mode
 					atbm_sta_connect_event(priv,hostevent);
 				}
 				else {
@@ -199,16 +203,21 @@ void atbm_event_handler(struct work_struct *work)
 				}
 				#endif
 				}
+#endif
 				break;
 			}
 			case WSM_EVENT_STA_ADD:
 			{
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 				atbm_sta_add_event(priv,*((int *)(event->evt.buffer)));
+#endif
 				break;
 			}
 			case WSM_EVENT_STA_LOSS:
 			{
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 				atbm_sta_loss_event(priv);
+#endif
 				break;
 			}
 			case WSM_EVENT_SMT_SUCCESS:
@@ -266,6 +275,18 @@ void atbm_event_handler(struct work_struct *work)
 				printk("cmdid:%d  data:%s\n", req->cmd_id, req->data);
 				break;
 			}
+			case WSM_EVENT_HOST_CUSTOMER_PRIVATE:
+			{
+				atbm_ioctl_customer_private_event_async(event->evt.buffer);
+				break;
+			}
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+			case WSM_EVENT_ATCMD_RECIVE:
+			{
+				atbm_ioctl_atcmd_event_async(event->evt.buffer);
+				break;
+			}
+#endif
 		}
 	}
 	mutex_unlock(&hw_priv->conf_mutex);
@@ -309,13 +330,20 @@ struct atbm_common *atbm_init_common(size_t hw_priv_data_len)
 #endif
 	wsm_buf_init(&hw_priv->wsm_cmd_buf);
 	spin_lock_init(&hw_priv->wsm_cmd.lock);
+
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+	atbm_sdio_atcmd_buf_init(hw_priv);
+#endif
 	
 	atbm_skb_queue_head_init(&hw_priv->rx_frame_queue);
 	atbm_skb_queue_head_init(&hw_priv->tx_frame_queue);
 	atbm_skb_queue_head_init(&hw_priv->rx_skb_queue);
+	
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 	spin_lock_init(&hw_priv->rx_path_lock);
 	sta_info_init(hw_priv);
 	spin_lock_init(&hw_priv->tx_queue_lock);
+#endif
 	return hw_priv;
 }
 
@@ -323,33 +351,58 @@ EXPORT_SYMBOL_GPL(atbm_init_common);
 
 void atbm_free_common( struct atbm_common  *dev)
 {
-	u16 val16;
-	int ret;
-	#ifdef TIME_DEBUG
-	jiffies_update(0);
-	#endif
-	//hare sdio + iot,let lmac know host initial done .add by wp
-	/* Set wakeup bit in device */
-	ret = atbm_reg_read_16(dev, ATBM_HIFREG_CONTROL_REG_ID, &val16);
-	if (ret < 0) {
-		atbm_dbg(ATBM_APOLLO_DBG_ERROR,
-			"%s: set_wakeup: can't read " \
-			"control register.\n", __func__);
-		goto out;
-	}
-	
-	ret = atbm_reg_write_16(dev, ATBM_HIFREG_CONTROL_REG_ID, val16 & ~ATBM_HIFREG_CONT_WUP_BIT);
-	if (ret < 0) {
-		atbm_dbg(ATBM_APOLLO_DBG_ERROR,
-			"%s: set_wakeup: can't write " \
-			"control register.\n", __func__);
-		goto out;
+	if (dev->wsm_caps.firmwareVersion < 13549){
+		u16 val16;
+		int ret;
+		#ifdef TIME_DEBUG
+		jiffies_update(0);
+		#endif
+		//hare sdio + iot,let lmac know host initial done .add by wp
+		/* Set wakeup bit in device */
+		ret = atbm_reg_read_16(dev, ATBM_HIFREG_CONTROL_REG_ID, &val16);
+		if (ret < 0) {
+			atbm_dbg(ATBM_APOLLO_DBG_ERROR,
+				"%s: set_wakeup: can't read " \
+				"control register.\n", __func__);
+			goto out;
+		}
+		
+		ret = atbm_reg_write_16(dev, ATBM_HIFREG_CONTROL_REG_ID, val16 & ~ATBM_HIFREG_CONT_WUP_BIT);
+		if (ret < 0) {
+			atbm_dbg(ATBM_APOLLO_DBG_ERROR,
+				"%s: set_wakeup: can't write " \
+				"control register.\n", __func__);
+			goto out;
+		}
 	}
 out:
 	kfree(dev);
 }
 EXPORT_SYMBOL_GPL(atbm_free_common);
 
+void atbm_clear_wakeup_reg( struct atbm_common  *dev)
+{
+	u16 val16;
+	int ret;
+
+	//hare sdio + iot,let lmac know host initial done .add by wp
+	/* Set wakeup bit in device */
+	ret = atbm_reg_read_16_for_sleep(dev, ATBM_HIFREG_CONTROL_REG_ID, &val16);
+	if (ret < 0) {
+		atbm_dbg(ATBM_APOLLO_DBG_ERROR,
+			"%s: set_wakeup: can't read " \
+			"control register.\n", __func__);
+	}
+	
+	ret = atbm_reg_write_16_for_sleep(dev, ATBM_HIFREG_CONTROL_REG_ID, val16 & ~ATBM_HIFREG_CONT_WUP_BIT);
+	if (ret < 0) {
+		atbm_dbg(ATBM_APOLLO_DBG_ERROR,
+			"%s: set_wakeup: can't write " \
+			"control register.\n", __func__);
+	}
+}
+
+extern int is_pre_rmmod;
 void atbm_unregister_common(struct atbm_common *hw_priv)
 {
 	atbm_printk_exit("atbm_unregister_common.++\n");
@@ -362,15 +415,24 @@ void atbm_unregister_common(struct atbm_common *hw_priv)
 	#ifdef TIME_DEBUG
 	jiffies_update(0);
 	#endif
-	hw_priv->sbus_ops->irq_unsubscribe(hw_priv->sbus_priv);
+	if ((hw_priv->wsm_caps.firmwareVersion < 13549) || (!is_pre_rmmod))
+	{
+#if (ATBM_WIFI_PLATFORM != PLATFORM_XM)		
+		hw_priv->sbus_ops->irq_unsubscribe(hw_priv->sbus_priv);
+#endif
+	}
 	#ifdef TIME_DEBUG
 	jiffies_update(0);
 	#endif
 	hw_priv->init_done = 0;
-	if(hw_priv->sbus_ops->sbus_xmit_func_deinit)
-		hw_priv->sbus_ops->sbus_xmit_func_deinit(hw_priv->sbus_priv);
-	if(hw_priv->sbus_ops->sbus_rev_func_deinit)	
-		hw_priv->sbus_ops->sbus_rev_func_deinit(hw_priv->sbus_priv);
+	if ((hw_priv->wsm_caps.firmwareVersion < 13549) || (!is_pre_rmmod))
+	{
+		hw_priv->close_driver = 1;
+		if(hw_priv->sbus_ops->sbus_xmit_func_deinit)
+			hw_priv->sbus_ops->sbus_xmit_func_deinit(hw_priv->sbus_priv);
+		if(hw_priv->sbus_ops->sbus_rev_func_deinit)	
+			hw_priv->sbus_ops->sbus_rev_func_deinit(hw_priv->sbus_priv);
+	}
 	atbm_unregister_bh(hw_priv);
 	//atbm_debug_release_common(hw_priv);
 	atbm_rx_bh_flush(hw_priv);
@@ -472,6 +534,7 @@ static void atbm_configure_wifi_mode(struct atbm_common *hw_priv)
 	}
 }
 
+#ifndef CONFIG_ATBM_SDIO_ATCMD
  void atbm_get_connectconfig(struct atbm_common *hw_priv)
 {
 	struct	wsm_sdio_getconfig_cnf cnf;	
@@ -486,6 +549,7 @@ static void atbm_configure_wifi_mode(struct atbm_common *hw_priv)
 	
 	atbm_printk_init("atbm_get_mac_address.%x:%x:%x:%x:%x\n",hw_priv->mac_addr[1],hw_priv->mac_addr[2],hw_priv->mac_addr[3],hw_priv->mac_addr[4],hw_priv->mac_addr[5]);
 }
+#endif
 
  void dump_mem(u8 *data, int len);
 
@@ -500,6 +564,19 @@ static void atbm_configure_wifi_mode(struct atbm_common *hw_priv)
  void atbm_set_psmode(struct atbm_common *hw_priv)
 {
 	wsm_set_psmode(hw_priv,&hw_priv->ps_mode_req,sizeof(hw_priv->ps_mode_req));
+}
+
+int atbm_notify_sta_connect_ok(struct atbm_common *hw_priv)
+{
+	int ret = 0;
+	struct wsm_generic_req notify_req;
+
+	ret = wsm_host_network_ok_notify(hw_priv, &notify_req, sizeof(notify_req));
+	if (ret)
+	{
+		atbm_printk_err("%s: wsm_host_network_ok_notify err. can not receive any datas!\n", __func__);
+	}
+	return ret;
 }
 
 extern int has_func_enable;
@@ -661,6 +738,10 @@ __wait_start_up:
 	#ifdef TIME_DEBUG
 	jiffies_update(0);
 	#endif
+	
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+	atbm_netdev_none(hw_priv);
+#else //CONFIG_ATBM_SDIO_ATCMD
 	rtnl_lock();
 	err = atbm_netdev_add(hw_priv,"wlan0");
 	rtnl_unlock();
@@ -668,6 +749,8 @@ __wait_start_up:
 	atbm_config_ak_net_mac(hw_priv->vif_list[0]->ndev);
 #endif
 	//atbm_setup_mac(hw_priv);
+#endif //CONFIG_ATBM_SDIO_ATCMD
+
 	hw_net_cfg_ok = 1;
 	#ifdef TIME_DEBUG
 	jiffies_update(0);
@@ -714,8 +797,9 @@ int access_file(char *path, char *buffer, int size, int isRead)
 {
 	int ret=0;
 	struct file *fp;
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0))
 	mm_segment_t old_fs = get_fs();
-
+#endif
 	if(isRead)
 		fp = filp_open(path,O_RDONLY,S_IRUSR);
 	else
@@ -734,9 +818,21 @@ int access_file(char *path, char *buffer, int size, int isRead)
 		}
 		else {
 			fp->f_pos = 0;
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0))
 			set_fs(KERNEL_DS);
+#endif
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
+			ret = kernel_read(fp,buffer,size,&fp->f_pos);
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 37))
+			ret = kernel_read(fp,fp->f_pos,buffer,size);
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 14))
+			ret = kernel_read(fp,&fp->f_pos,buffer,size);
+#else
 			ret = vfs_read(fp,buffer,size,&fp->f_pos);
+#endif
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0))
 			set_fs(old_fs);
+#endif
 		}
 	}
 	else
@@ -747,9 +843,21 @@ int access_file(char *path, char *buffer, int size, int isRead)
 		}
 		else {
 			fp->f_pos = 0;
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0))
 			set_fs(KERNEL_DS);
+#endif
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
+			ret = kernel_write(fp,buffer,size,&fp->f_pos);
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 37))
+			ret = kernel_write(fp,buffer,size,fp->f_pos);
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 14))
+			ret = kernel_write(fp,&fp->f_pos,buffer,size);
+#else
 			ret = vfs_write(fp,buffer,size,&fp->f_pos);
+#endif
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0))
 			set_fs(old_fs);
+#endif
 		}
 	}
 	filp_close(fp,NULL);

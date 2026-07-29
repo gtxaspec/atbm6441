@@ -2,19 +2,19 @@
 #CONFIG_USB_AGGR_URB_TX
 #CONFIG_TX_NO_CONFIRM
 #
-# 可以用来选择不同是模式，CONFIG_USB_AGGR_URB_TX 定义上时一定需要定义CONFIG_USE_DMA_ADDR_BUFFER
-# 1> CONFIG_USB_AGGR_URB_TX + CONFIG_TX_NO_CONFIRM，每个urb 发送多个txframe 并且不需要confirm，需要打开lmac的NO_NEED_CONFIRM 宏，并且ratecontrol在lmac 实现
-# 2> CONFIG_USB_AGGR_URB_TX 每个urb 发送多个txframe 并且需要confirm，需要关闭lmac的NO_NEED_CONFIRM 宏
-# 3> 所有宏都不定义，每个urb 发送一个txframe 并且需要confirm，并且urb直接使用skbbuffer，需要关闭lmac的NO_NEED_CONFIRM 宏
-# 4> 定义CONFIG_USE_DMA_ADDR_BUFFER，每个urb 发送一个txframe 并且需要confirm，并且urb直接DMAbuffer，需要把数据从skb copy到DMAbuffer，需要关闭lmac的NO_NEED_CONFIRM 宏，
-# 5> 定义CONFIG_USE_DMA_ADDR_BUFFER+ CONFIG_TX_NO_CONFIRM，每个urb 发送一个txframe 并且不需要confirm，并且urb直接DMAbuffer，需要把数据从skb copy到DMAbuffer，需要开lmac的NO_NEED_CONFIRM 宏，并且ratecontrol在lmac 实现
-# 6> 定义CONFIG_TX_NO_CONFIRM，每个urb 发送一个txframe 并且不需要confirm，并且urb直接使用skbbuffer，需要打开lmac的NO_NEED_CONFIRM 宏，并且ratecontrol在lmac 实现
+# 锟斤拷锟斤拷锟斤拷锟斤拷选锟斤拷同锟斤拷模式锟斤拷CONFIG_USB_AGGR_URB_TX 锟斤拷锟斤拷锟斤拷时一锟斤拷锟斤拷要锟斤拷锟斤拷CONFIG_USE_DMA_ADDR_BUFFER
+# 1> CONFIG_USB_AGGR_URB_TX + CONFIG_TX_NO_CONFIRM锟斤拷每锟斤拷urb 锟斤拷锟酵讹拷锟絫xframe 锟斤拷锟揭诧拷锟斤拷要confirm锟斤拷锟斤拷要锟斤拷lmac锟斤拷NO_NEED_CONFIRM 锟疥，锟斤拷锟斤拷ratecontrol锟斤拷lmac 实锟斤拷
+# 2> CONFIG_USB_AGGR_URB_TX 每锟斤拷urb 锟斤拷锟酵讹拷锟絫xframe 锟斤拷锟斤拷锟斤拷要confirm锟斤拷锟斤拷要锟截憋拷lmac锟斤拷NO_NEED_CONFIRM 锟斤拷
+# 3> 锟斤拷锟叫宏都锟斤拷锟斤拷锟藉，每锟斤拷urb 锟斤拷锟斤拷一锟斤拷txframe 锟斤拷锟斤拷锟斤拷要confirm锟斤拷锟斤拷锟斤拷urb直锟斤拷使锟斤拷skbbuffer锟斤拷锟斤拷要锟截憋拷lmac锟斤拷NO_NEED_CONFIRM 锟斤拷
+# 4> 锟斤拷锟斤拷CONFIG_USE_DMA_ADDR_BUFFER锟斤拷每锟斤拷urb 锟斤拷锟斤拷一锟斤拷txframe 锟斤拷锟斤拷锟斤拷要confirm锟斤拷锟斤拷锟斤拷urb直锟斤拷DMAbuffer锟斤拷锟斤拷要锟斤拷锟斤拷锟捷达拷skb copy锟斤拷DMAbuffer锟斤拷锟斤拷要锟截憋拷lmac锟斤拷NO_NEED_CONFIRM 锟疥，
+# 5> 锟斤拷锟斤拷CONFIG_USE_DMA_ADDR_BUFFER+ CONFIG_TX_NO_CONFIRM锟斤拷每锟斤拷urb 锟斤拷锟斤拷一锟斤拷txframe 锟斤拷锟揭诧拷锟斤拷要confirm锟斤拷锟斤拷锟斤拷urb直锟斤拷DMAbuffer锟斤拷锟斤拷要锟斤拷锟斤拷锟捷达拷skb copy锟斤拷DMAbuffer锟斤拷锟斤拷要锟斤拷lmac锟斤拷NO_NEED_CONFIRM 锟疥，锟斤拷锟斤拷ratecontrol锟斤拷lmac 实锟斤拷
+# 6> 锟斤拷锟斤拷CONFIG_TX_NO_CONFIRM锟斤拷每锟斤拷urb 锟斤拷锟斤拷一锟斤拷txframe 锟斤拷锟揭诧拷锟斤拷要confirm锟斤拷锟斤拷锟斤拷urb直锟斤拷使锟斤拷skbbuffer锟斤拷锟斤拷要锟斤拷lmac锟斤拷NO_NEED_CONFIRM 锟疥，锟斤拷锟斤拷ratecontrol锟斤拷lmac 实锟斤拷
 #
-##对于调度慢+cpu强的板子使用 模式1 或者 模式2
-##对于调度快+cpu慢的板子使用 模式3 或者 模式6
-## 默认使用模式 3
+##锟斤拷锟节碉拷锟斤拷锟斤拷+cpu强锟侥帮拷锟斤拷使锟斤拷 模式1 锟斤拷锟斤拷 模式2
+##锟斤拷锟节碉拷锟饺匡拷+cpu锟斤拷锟侥帮拷锟斤拷使锟斤拷 模式3 锟斤拷锟斤拷 模式6
+## 默锟斤拷使锟斤拷模式 3
 #####################################################################################################################################################################################################################
-##指定配置文件路径，当配置文件存在时使用配置文件中的dcxo值不使用efuse中的dcxo，配置文件中的delta_gain为修正值，如果文件不存在则直接使用efuse中的数据
+##指锟斤拷锟斤拷锟斤拷锟侥硷拷路锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟侥硷拷锟斤拷锟斤拷时使锟斤拷锟斤拷锟斤拷锟侥硷拷锟叫碉拷dcxo值锟斤拷使锟斤拷efuse锟叫碉拷dcxo锟斤拷锟斤拷锟斤拷锟侥硷拷锟叫碉拷delta_gain为锟斤拷锟斤拷值锟斤拷锟斤拷锟斤拷募锟斤拷锟斤拷锟斤拷锟斤拷锟街憋拷锟绞癸拷锟絜fuse锟叫碉拷锟斤拷锟斤拷
 ATBM_CONFIG_FILE="/atbm_txpwer_dcxo_cfg.txt"
 ifneq ($(IF1NAME),)
 ccflags-y += -DCONFIG_IF1NAME=\"$(IF1NAME)\"
@@ -46,7 +46,7 @@ ifeq ($(platform),PLATFORM_AMLOGIC)
 endif
 
 #if used sdio download firmware
-ccflags-y += -DWIFI_FW_DOWNLOAD
+# ccflags-y += -DWIFI_FW_DOWNLOAD  # firmware is in MCU NVM
 # Extra IE for probe response from upper layer is needed in P2P GO
 # For offloading probe response to FW, the extra IE must be included
 # in the probe response template
@@ -146,6 +146,9 @@ ccflags-y += -DSDIO_BUS
 #ccflags-y += -DATBM_SDIO_TXRX_ENHANCE
 #ccflags-y += -DATBM_WSM_SDIO_TX_MULT
 #ccflags-y += -DRESET_CHIP
+ifeq ($(CONFIG_ATBM_SDIO_ATCMD),y)
+ccflags-y += -DCONFIG_ATBM_SDIO_ATCMD
+endif
 endif
 ifeq ($(SPI_BUS),y)
 ccflags-y += -DSPI_BUS
@@ -182,12 +185,17 @@ $(ATBM_MODULES_NAME)-y += \
 		wsm.o \
 		main.o \
 		iface.o \
-		txrx.o  \
-		agg-rx.o \
-		rx.o	\
-		sta_info.o \
 		util.o module_fs.o \
 		atbm_ioctl.o
+
+ifneq ($(CONFIG_ATBM_SDIO_ATCMD),y)
+$(ATBM_MODULES_NAME)-y += \
+		sta_info.o \
+		txrx.o  \
+		agg-rx.o \
+		rx.o		
+endif
+
 ifeq ($(USB_BUS),y)
 $(ATBM_MODULES_NAME)-y += apollo_usb.o atbm_platform.o hwio_usb.o bh_usb.o
 else ifeq ($(SDIO_BUS),y)

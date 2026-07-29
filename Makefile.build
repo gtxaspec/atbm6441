@@ -91,12 +91,12 @@ ifeq ($(TX_NO_CONFIRM),y)
 WIFI_INSTALL_DIR := $(WIFI_INSTALL_DIR)_notxconfirm
 endif
 
-all: get_ver modules install
+all:modules install
 get_ver:
 	@echo "#define DRIVER_VER " $(HMAC_SVN_REV) >hal_apollo/svn_version.h
 	@echo "svn version:" $(HMAC_SVN_REV)
 
-modules:get_ver clean
+modules:clean
 	@echo "arch=$(ARCH)"						
 	$(MAKE) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) -C $(KDIR) M=$(shell pwd)  modules -j8
 #	$(MAKE) -C $(KDIR) M=$(PWD) modules

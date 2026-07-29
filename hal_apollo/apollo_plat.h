@@ -31,6 +31,8 @@
 #define PLATFORM_AMLOGIC_S805		(13)	
 #define PLATFORM_AMLOGIC_905		(8)	
 #define PLATFORM_ANKAI_RTOS         (20)
+#define PLATFORM_INGENIC_T40             (22)
+#define PLATFORM_INGENIC_T41             (23)
 
 #ifndef  ATBM_WIFI_PLATFORM
 #define ATBM_WIFI_PLATFORM			PLATFORM_XUNWEI

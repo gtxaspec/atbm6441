@@ -27,12 +27,11 @@
 #include "debug.h"
 #include "hwio.h"
 #include "sbus.h"
+#include "atbm_ioctl_ext.h"
 
 void atbm_rx_cb(struct atbm_vif *priv,
 		  struct wsm_rx *arg,
 		  struct sk_buff **skb_p);
-
-#define wsm_printk(...) // printk
 
 extern int test_cnt_packet;
 
@@ -138,12 +137,12 @@ int atbm_wifi_run_status_get(void)
 }
 /***********************/
 
-static inline void wsm_cmd_lock(struct atbm_common *hw_priv)
+void wsm_cmd_lock(struct atbm_common *hw_priv)
 {
 	mutex_lock(&hw_priv->wsm_cmd_mux);
 }
 
-static inline void wsm_cmd_unlock(struct atbm_common *hw_priv)
+void wsm_cmd_unlock(struct atbm_common *hw_priv)
 {
 	mutex_unlock(&hw_priv->wsm_cmd_mux);
 }
@@ -213,11 +212,12 @@ static int wsm_event_indication(struct atbm_common *hw_priv,
 		&& (eventid != WSM_EVENT_HOST_INSMOD)
 		&& (eventid != WSM_EVENT_HOST_WAKEUP_REASON)
 		&& (eventid != WSM_EVENT_HOST_DISCONN_REASON)
-		&& (eventid != WSM_EVENT_HOST_CONN_ERR_REASON)){
+		&& (eventid != WSM_EVENT_HOST_CONN_ERR_REASON)
+		&& (eventid != WSM_EVENT_SDIO_INPUTCHAN_EVNET)){
 		priv = ABwifi_hwpriv_to_vifpriv(hw_priv, interface_link_id);
 
 		if (unlikely(!priv)) {
-			wsm_printk( "[WSM] Event: %d for removed "
+			atbm_control_dbg(ATBM_CONTROL_DEBUG_RX, "[WSM] Event: %d for removed "
 				   "interface, ignoring\n", eventid);
 			return 0;
 		}
@@ -232,6 +232,8 @@ static int wsm_event_indication(struct atbm_common *hw_priv,
 
 	if(eventid == WSM_EVENT_SDIO_INPUTCHAN_EVNET){
 		hw_priv->hw_xmits =__le32_to_cpu(WSM_GET32(buf));	
+		atbm_control_dbg(ATBM_CONTROL_DEBUG_RX, "%s update hw_xmits:%d...\n", __func__, hw_priv->hw_xmits);
+		atbm_bh_wakeup(hw_priv);
 	}
 	else {
 		event = atbm_kzalloc(sizeof(struct atbm_wsm_event), GFP_KERNEL);
@@ -242,11 +244,16 @@ static int wsm_event_indication(struct atbm_common *hw_priv,
 			return 0;
 		}
 
+		u32 event_size = SDIO_EVENT_IND_LEN;
+		if (hw_priv->wsm_caps.firmwareVersion < 12802)
+		{
+			event_size = 128;
+		}
 		event->evt.eventId = eventid;	
-		WSM_GET(buf, event->evt.buffer,MAX_SDIO_EVENT_BUFFER_LEN);
+		WSM_GET(buf, event->evt.buffer, event_size);
 		event->if_id = interface_link_id;
 
-		wsm_printk( "[WSM] Event: %d\n",event->evt.eventId);
+		atbm_control_dbg(ATBM_CONTROL_DEBUG_RX, "[WSM] Event: %d\n",event->evt.eventId);
 		//frame_hexdump("eventbuf:",event->evt.buffer,64);
 		spin_lock_bh(&hw_priv->event_queue_lock);
 		first = list_empty(&hw_priv->event_queue);
@@ -288,13 +295,20 @@ int wsm_cmd_send(struct atbm_common *hw_priv,
 		wsm_buf_reset(buf);
 		return -3;
 	}
+
+	if(cmd > WSM_EXTEND_MSG_REQ_ID){
+		wsm_buf_reset(buf);
+		return -1;
+	}
 	
-	if (cmd == 0x0006) /* Write MIB */
-		wsm_printk( "[WSM] >>> 0x%.4X [MIB: 0x%.4X] (%d)\n",
+	if (cmd == 0x0006) /* Write MIB */{
+		atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, "[WSM] >>> 0x%.4X [MIB: 0x%.4X] (%d)\n",
 			cmd, __le16_to_cpu(((__le16 *)buf->begin)[sizeof(struct wsm_hdr_tx)/2]),
 			buf_len);
-	else
-		wsm_printk( "[WSM] >>> 0x%.4X (%d)\n", cmd, buf_len);
+	}
+	else {
+		atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, "[WSM] >>> 0x%.4X (%d)\n", cmd, buf_len);
+	}
 
 	/* Fill HI message header */
 	/* BH will add sequence number */
@@ -417,12 +431,14 @@ int wsm_cmd_send_no_ack(struct atbm_common *hw_priv,
 		return -3;
 	}
 	
-	if (cmd == 0x0006) /* Write MIB */
-		wsm_printk( "[WSM] >>> 0x%.4X [MIB: 0x%.4X] (%d)\n",
+	if (cmd == 0x0006) /* Write MIB */{
+		atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, "[WSM] >>> 0x%.4X [MIB: 0x%.4X] (%d)\n",
 			cmd, __le16_to_cpu(((__le16 *)buf->begin)[sizeof(struct wsm_hdr_tx)/2]),
 			buf_len);
-	else
-		wsm_printk( "[WSM] >>> 0x%.4X (%d)\n", cmd, buf_len);
+	}
+	else {
+		atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, "[WSM] >>> 0x%.4X (%d)\n", cmd, buf_len);
+	}
  
 	if (if_id == -1)
 		if_id = 0;
@@ -454,7 +470,7 @@ void wsm_lock_tx(struct atbm_common *hw_priv)
 	wsm_cmd_lock(hw_priv);
 	if (atomic_add_return(1, &hw_priv->tx_lock) == 1) {
 		if (wsm_flush_tx(hw_priv))
-			wsm_printk( "[WSM] TX is locked.\n");
+			atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, "[WSM] TX is locked.\n");
 	}
 	wsm_cmd_unlock(hw_priv);
 }
@@ -463,7 +479,7 @@ void wsm_lock_tx(struct atbm_common *hw_priv)
 void wsm_lock_tx_async(struct atbm_common *hw_priv)
 {
 	if (atomic_add_return(1, &hw_priv->tx_lock) == 1)
-		wsm_printk( "[WSM] TX is locked (async).\n");
+		atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, "[WSM] TX is locked (async).\n");
 }
 
 void wsm_unlock_tx_async(struct atbm_common *hw_priv)
@@ -485,15 +501,16 @@ bool wsm_vif_flush_tx(struct atbm_vif *priv)
 void wsm_unlock_tx(struct atbm_common *hw_priv)
 {
 	int tx_lock;
-	if (hw_priv->bh_error)
-		wsm_printk(KERN_ERR "fatal error occured, unlock is unsafe\n");
+	if (hw_priv->bh_error){
+		atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, KERN_ERR "fatal error occured, unlock is unsafe\n");
+	}
 	else {
 		tx_lock = atomic_sub_return(1, &hw_priv->tx_lock);
 		if (tx_lock < 0) {
 			BUG_ON(1);
 		} else if (tx_lock == 0) {
 			atbm_bh_wakeup(hw_priv);
-			wsm_printk(KERN_DEBUG "[WSM] TX is unlocked.\n");
+			atbm_control_dbg(ATBM_CONTROL_DEBUG_TX, KERN_DEBUG "[WSM] TX is unlocked.\n");
 		}
 	}
 }
@@ -546,6 +563,7 @@ underflow:
 	return -EINVAL;
 }
 
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 static int wsm_receive_indication(struct atbm_common *hw_priv,
 					int interface_link_id,
 					struct wsm_buf *buf,
@@ -599,6 +617,8 @@ static int wsm_receive_indication(struct atbm_common *hw_priv,
 underflow:
 	return -EINVAL;
 }
+#endif
+
 static int wsm_startup_indication(struct atbm_common *hw_priv,
 					struct wsm_buf *buf)
 {
@@ -635,8 +655,14 @@ static int wsm_startup_indication(struct atbm_common *hw_priv,
 	atbm_printk_init("firmwareCap2 %x\n",firmwareCap2);
 	hw_priv->wsm_caps.firmwareCap	|= (firmwareCap2<<16);
 	hw_priv->wsm_caps.NumOfHwXmitedAddr = Config[3];
-	hw_priv->hw_xmits =   hw_priv->wsm_caps.numInpChBufs;
-	hw_priv->hw_bufs_free = hw_priv->wsm_caps.numInpChBufs;
+	if (hw_priv->wsm_caps.firmwareCap&CAPABLITIES_SDIO_TX_LIST_CHECK){
+		hw_priv->hw_xmits = Config[2];
+		hw_priv->hw_bufs_free = Config[2];
+	}
+	else {
+		hw_priv->hw_xmits = hw_priv->wsm_caps.numInpChBufs;
+		hw_priv->hw_bufs_free = hw_priv->wsm_caps.numInpChBufs;
+	}
 	hw_priv->hw_bufs_free_init = hw_priv->hw_bufs_free;
 //	BUG_ON(hw_priv->wsm_caps.NumOfHwXmitedAddr == 0);
 //	printk("wsm_caps.firmwareCap %x firmware used %s-rate policy\n",hw_priv->wsm_caps.firmwareCap,hw_priv->wsm_caps.firmwareCap&CAPABILITIES_NEW_RATE_POLICY?"new":"old");
@@ -652,7 +678,7 @@ static int wsm_startup_indication(struct atbm_common *hw_priv,
 		"   Input buffers: %d x %d bytes\n"
 		"   Hardware: %d.%d\n"
 		"   %s firmware [%s], ver: %d, build: %d,"
-		" api: %d, cap: 0x%.4X Config[%x]  expection %x, ep0 cmd addr %x\n",
+		" api: %d, cap: 0x%.4X Config[%x]  expection %x, tx prog %d\n",
 		hw_priv->wsm_caps.numInpChBufs,
 		hw_priv->wsm_caps.sizeInpChBuf,
 		hw_priv->wsm_caps.hardwareId,
@@ -662,10 +688,10 @@ static int wsm_startup_indication(struct atbm_common *hw_priv,
 		hw_priv->wsm_caps.firmwareVersion,
 		hw_priv->wsm_caps.firmwareBuildNumber,
 		hw_priv->wsm_caps.firmwareApiVer,
-		hw_priv->wsm_caps.firmwareCap,Config[0],Config[1],Config[2]);
+		hw_priv->wsm_caps.firmwareCap,Config[0],Config[1],hw_priv->hw_xmits);
 		hw_priv->wsm_caps.firmwareReady = 1;
 		hw_priv->wsm_caps.exceptionaddr =Config[1];
-		hw_priv->wsm_caps.HiHwCnfBufaddr = Config[2];//ep0 addr
+		//hw_priv->wsm_caps.HiHwCnfBufaddr = Config[2];//ep0 addr
 #if 0	
 	atbm_printk_init("CAPABILITIES_ATBM_PRIVATE_IE      [%d]\n" ,!!(hw_priv->wsm_caps.firmwareCap &CAPABILITIES_ATBM_PRIVATE_IE)		); 
 	atbm_printk_init("CAPABILITIES_NVR_IPC              [%d]\n" ,!!(hw_priv->wsm_caps.firmwareCap &CAPABILITIES_NVR_IPC)  );  
@@ -731,6 +757,12 @@ static int wsm_startup_indication(struct atbm_common *hw_priv,
 	atbm_printk_init("CONFIG_PRODUCT_TEST_USE_GOLDEN_LED [0]\n");
 #endif
 #endif
+	if (((hw_priv->wsm_caps.firmwareVersion < 13549) && (strcmp(PRIV_VERSION, "2022-0104-1105")>=0))
+		|| ((hw_priv->wsm_caps.firmwareVersion >= 13549) && (strcmp(PRIV_VERSION, "2022-0104-1105")<0)))
+	{
+		printk("ERROR !!! Unmatched firmwareVersion and driverVersion ...ERROR !!!\n");
+		goto underflow;
+	}
 
 	return 0;
 
@@ -785,6 +817,49 @@ underflow:
 	return -EINVAL;
 }
 
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+static int wsm_atcmd_indication(struct atbm_common *hw_priv, struct wsm_buf *buf, int interface_link_id)
+{
+	int first;
+	struct atbm_wsm_event *event = NULL;
+	int len;
+
+	event = atbm_kzalloc(sizeof(struct atbm_wsm_event), GFP_KERNEL);
+	
+	if(event == NULL){
+		WARN_ON(1);
+		return -1;
+	}
+
+	event->evt.eventId = WSM_EVENT_ATCMD_RECIVE;	
+	
+	//atbm_printk_init("buf->begin:%x, buf->data:%x, buf->end:%x\n",buf->begin,buf->data,buf->end);
+	len = buf->end - buf->data;
+	if(len > MAX_SDIO_EVENT_BUFFER_LEN){
+		goto underflow;
+	}
+	memcpy(event->evt.buffer, (buf)->data, len);	
+
+	event->if_id = interface_link_id;
+	
+	atbm_control_dbg(ATBM_CONTROL_DEBUG_RX, "[WSM] Event: %d\n",event->evt.eventId);
+	spin_lock_bh(&hw_priv->event_queue_lock);
+	first = list_empty(&hw_priv->event_queue);
+	list_add_tail(&event->link, &hw_priv->event_queue);
+	spin_unlock_bh(&hw_priv->event_queue_lock);
+	
+	if (first)
+		atbm_hw_priv_queue_work(hw_priv, &hw_priv->event_handler);
+	
+	return 0;
+
+underflow:
+	if(event)
+		atbm_kfree(event);
+	return -EINVAL;
+}
+#endif
+
 int wsm_handle_rx(struct atbm_common *hw_priv, int id,
 		  struct wsm_hdr *wsm, struct sk_buff **skb_p)
 {
@@ -798,7 +873,7 @@ int wsm_handle_rx(struct atbm_common *hw_priv, int id,
 	wsm_buf.data = (u8 *)&wsm[1];
 	wsm_buf.end = &wsm_buf.begin[__le32_to_cpu(wsm->len)];
 
-	wsm_printk("[WSM][vid=%d] <<< 0x%.4X (%d)\n",interface_link_id, id,
+	atbm_control_dbg(ATBM_CONTROL_DEBUG_RX, "[WSM][vid=%d] <<< 0x%.4X (%d)\n",interface_link_id, id,
 			wsm_buf.end - wsm_buf.begin);
 	
 	if (id & WSM_CNF_BASE) {
@@ -849,6 +924,7 @@ int wsm_handle_rx(struct atbm_common *hw_priv, int id,
 		case WSM_GET_TIME_RESP_ID:
 		case WSM_GET_ETF_RX_INFO_RESP_ID:
 		case WSM_CONN_LOSE_RESP_ID:
+		case WSM_DIRECT_TRANS_BUFFER_RESP_ID:
 			if (likely(wsm_arg))
 				ret = wsm_generic_get_confirm(hw_priv,
 									wsm_arg,
@@ -894,6 +970,10 @@ int wsm_handle_rx(struct atbm_common *hw_priv, int id,
 		case WSM_WAKEUP_EVENT_RESP_ID:
 		case WSM_CUSTOMER_CMD_RESP_ID:
 		case WSM_CUSTOMER_CERT_SAVE_RESP_ID:
+		case WSM_FORCE_REBOOT_RESP_ID:
+		case WSM_NETWORK_OK_RESP_ID:
+		case WSM_HOST_REBOOT_NOTIFY_RESP_ID:
+		case WSM_EXTEND_MSG_RESP_ID:
 			WARN_ON(wsm_arg != NULL);
 			ret = wsm_generic_confirm(hw_priv, wsm_arg, &wsm_buf);
 			if (ret)
@@ -918,7 +998,8 @@ int wsm_handle_rx(struct atbm_common *hw_priv, int id,
 		ret = 0; /* Error response from device should ne stop BH. */
 
 		wake_up(&hw_priv->wsm_cmd_wq);
-	} else if (id & WSM_IND_BASE) {
+	} 
+	else if (id & WSM_IND_BASE) {
 		switch (id) {
 		case WSM_STARTUP_IND_ID:
 			ret = wsm_startup_indication(hw_priv, &wsm_buf);
@@ -928,7 +1009,12 @@ int wsm_handle_rx(struct atbm_common *hw_priv, int id,
 			break;
 		case WSM_RECEIVE_INDICATION_ID:
 		case WSM_RECEIVE2_INDICATION_ID:
+#ifndef CONFIG_ATBM_SDIO_ATCMD
 			ret = wsm_receive_indication(hw_priv,interface_link_id,&wsm_buf,skb_p); 
+#else
+			WARN_ON(1);
+			ret = -EINVAL;			
+#endif
 			break;
 		case  WSM_TRACE_IND_ID:
 			ret=0;
@@ -936,7 +1022,20 @@ int wsm_handle_rx(struct atbm_common *hw_priv, int id,
 			//STUB();
 			break;
 		}
-	} else {
+	}
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+	else if(id & WSM_SDIO_ATCMD_BASE){
+		switch (id) {
+		case WSM_SDIO_ATCMD_DIRECT_ID:
+			ret = wsm_atcmd_indication(hw_priv, &wsm_buf, interface_link_id);
+			break;
+		default:
+			BUG_ON(1);
+			break;
+		}
+	}
+#endif
+	else {
 		WARN_ON(1);
 		ret = -EINVAL;
 	}
@@ -961,7 +1060,6 @@ int wsm_txed(struct atbm_common *hw_priv, u8 *data)
 
 /* ******************************************************************** */
 /* WSM buffer*/
-#define MAX_WSM_BUF_LEN (1632)//
 
 void wsm_buf_init(struct wsm_buf *buf)
 {
@@ -2035,6 +2133,133 @@ nomem:
 	return -ENOMEM;
 }
 
+int wsm_direct_trans_buffer(struct atbm_common *hw_priv, void *buffer, size_t buf_size)
+{
+	int ret;
+	struct wsm_buf *buf = &hw_priv->wsm_cmd_buf;
+	struct wsm_generic_get_arg_s wsm_shmem_arg = {
+		.buf = buffer,
+		.buf_size = buf_size,
+	};
+
+	wsm_cmd_lock(hw_priv);
+
+	WSM_PUT(buf,buffer, buf_size);
+	ret = wsm_cmd_send(hw_priv, buf, &wsm_shmem_arg, WSM_DIRECT_TRANS_BUFFER_REQ_ID, WSM_CMD_TIMEOUT,0);
+
+	wsm_cmd_unlock(hw_priv);
+	return ret;
+
+nomem:
+	wsm_cmd_unlock(hw_priv);
+	return -ENOMEM;
+}
+
+int wsm_force_reboot(struct atbm_common *hw_priv, void *buffer,size_t buf_size)
+{
+	int ret;
+	struct wsm_buf *buf = &hw_priv->wsm_cmd_buf;
+
+	wsm_cmd_lock(hw_priv);
+
+	WSM_PUT(buf,buffer, buf_size);
+	ret = wsm_cmd_send(hw_priv, buf, NULL, WSM_FORCE_REBOOT_REQ_ID, WSM_CMD_TIMEOUT,0);
+
+	wsm_cmd_unlock(hw_priv);
+	return ret;
+
+nomem:
+	wsm_cmd_unlock(hw_priv);
+	return -ENOMEM;
+}
+
+int wsm_host_reboot_notify(struct atbm_common *hw_priv, void *buffer,size_t buf_size)
+{
+	int ret;
+	struct wsm_buf *buf = &hw_priv->wsm_cmd_buf;
+
+	wsm_cmd_lock(hw_priv);
+
+	WSM_PUT(buf,buffer, buf_size);
+	ret = wsm_cmd_send(hw_priv, buf, NULL, WSM_HOST_REBOOT_NOTIFY_REQ_ID, WSM_CMD_TIMEOUT,0);
+
+	wsm_cmd_unlock(hw_priv);
+	return ret;
+
+nomem:
+	wsm_cmd_unlock(hw_priv);
+	return -ENOMEM;
+}
+
+
+int wsm_host_network_ok_notify(struct atbm_common *hw_priv, void *buffer,size_t buf_size)
+{
+	int ret;
+	struct wsm_buf *buf = &hw_priv->wsm_cmd_buf;
+
+	wsm_cmd_lock(hw_priv);
+
+	if (hw_priv->wsm_caps.firmwareVersion >= 13679)
+	{
+		WSM_PUT(buf,buffer, buf_size);
+		ret = wsm_cmd_send_no_ack(hw_priv, buf, NULL, WSM_NETWORK_OK_REQ_ID,0);
+	}
+	else 
+	{
+		ret = 0;
+	}
+
+	wsm_cmd_unlock(hw_priv);
+	return ret;
+
+nomem:
+	wsm_cmd_unlock(hw_priv);
+	return -ENOMEM;
+}
+
+int wsm_ext_fast_cfg_recv(struct atbm_common *hw_priv, void *buffer,size_t buf_size)
+{
+	int ret;
+	struct wsm_buf *buf = &hw_priv->wsm_cmd_buf;
+	struct wsm_extend_msg_req extend_msg = {0};
+
+	wsm_cmd_lock(hw_priv);
+
+	extend_msg.externId = WSM_EXTEND_FAST_CFG_RECV_ID;
+	WSM_PUT(buf, &extend_msg, sizeof(struct wsm_extend_msg_req));
+	WSM_PUT(buf, buffer, buf_size);
+	ret = wsm_cmd_send(hw_priv, buf, NULL, WSM_EXTEND_MSG_REQ_ID, WSM_CMD_TIMEOUT,0);
+
+	wsm_cmd_unlock(hw_priv);
+	return ret;
+
+nomem:
+	wsm_cmd_unlock(hw_priv);
+	return -ENOMEM;
+}
+
+int wsm_ext_fast_cfg_send(struct atbm_common *hw_priv, void *buffer,size_t buf_size)
+{
+	int ret;
+	struct wsm_buf *buf = &hw_priv->wsm_cmd_buf;
+	struct wsm_extend_msg_req extend_msg = {0};
+
+	wsm_cmd_lock(hw_priv);
+
+	extend_msg.externId = WSM_EXTEND_FAST_CFG_SEND_ID;
+	WSM_PUT(buf, &extend_msg, sizeof(struct wsm_extend_msg_req));
+	WSM_PUT(buf,buffer, buf_size);
+	ret = wsm_cmd_send(hw_priv, buf, NULL, WSM_EXTEND_MSG_REQ_ID, WSM_CMD_TIMEOUT,0);
+
+	wsm_cmd_unlock(hw_priv);
+	return ret;
+
+nomem:
+	wsm_cmd_unlock(hw_priv);
+	return -ENOMEM;
+}
+
+
 
 #define HI_STATUS_SUCCESS (0)
 
@@ -2189,6 +2414,18 @@ int wsm_get_tx(struct atbm_common *hw_priv, u8 **data,
 		*vif_selected = 0;
 		*pskb = skb;
 	}
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+	else if(hw_priv->at_cmd_get < hw_priv->at_cmd_put){
+		BUG_ON(hw_priv->at_cmd_buf[hw_priv->at_cmd_get & (ATBM_AT_CMD_MAX_SW_CACHE - 1)] == NULL);
+		wsm_tx = (struct wsm_hdr_tx *)hw_priv->at_cmd_buf[hw_priv->at_cmd_get & (ATBM_AT_CMD_MAX_SW_CACHE - 1)];
+		*data = hw_priv->at_cmd_buf[hw_priv->at_cmd_get & (ATBM_AT_CMD_MAX_SW_CACHE - 1)];
+		*tx_len = wsm_tx->len;
+		*burst = 1;
+		*vif_selected = 0;	
+		count ++;
+	}
+#endif
+	
 	return count;
 }
 

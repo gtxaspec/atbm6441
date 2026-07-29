@@ -38,7 +38,7 @@ struct atbm_pm_state {
 #ifdef CONFIG_WAKELOCK
 	struct wake_lock wakelock;
 #else
-	struct timer_list stay_awake;
+	struct atbm_timer_list stay_awake;
 #endif
 	struct platform_device *pm_dev;
 	spinlock_t lock;

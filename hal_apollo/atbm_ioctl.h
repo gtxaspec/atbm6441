@@ -17,6 +17,10 @@ void atbm_ioctl_driver_async(int insmod);
 void atbm_ioctl_wakeup_async(int reason);
 void atbm_ioctl_disconn_async(int reason);
 void atbm_ioctl_conn_err_async(int reason);
+void atbm_ioctl_customer_private_event_async(u8 *event_buffer);
+#ifdef CONFIG_ATBM_SDIO_ATCMD
+void atbm_ioctl_atcmd_event_async(u8 *event_buffer);
+#endif
 
 int atbm_wsm_ps(struct atbm_common *hw_priv, unsigned int data);
 int atbm_wsm_connect(struct atbm_common *hw_priv, unsigned int data);
@@ -55,6 +59,27 @@ int atbm_wsm_get_rssi(struct atbm_common *hw_priv, unsigned int buff);
 int atbm_wsm_get_time(struct atbm_common *hw_priv, unsigned int buff);
 int atbm_wsm_clear_wifi_config(struct atbm_common *hw_priv);
 int atbm_wsm_get_etf_rx_info(struct atbm_common *hw_priv, unsigned int buff);
+int atbm_wsm_pre_rmmod(struct atbm_common *hw_priv);
+int atbm_wsm_is_tx_buffer_empty(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_set_wakeup_event(struct atbm_common *hw_priv, int wakeup_event);
+int atbm_wsm_add_netpattern_info(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_del_netpattern_info(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_add_conn_param_info(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_del_conn_param_info(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_set_wk_ssid(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_clear_wk_ssid(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_conn_lose_map(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_conn_switch(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_auto_reconnect(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_send_customer_cmd(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_customer_cert_save(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_start_check_alive(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_direct_trans_buffer(struct atbm_common *hw_priv, unsigned long buff);
+int atbm_wsm_set_control_debug_mask(struct atbm_common *hw_priv, u32 debug_mask);
+int atbm_wsm_force_reboot(struct atbm_common *hw_priv);
+int atbm_wsm_host_reboot_notify(struct atbm_common *hw_priv);
+int atbm_wsm_fast_cfg_recv(struct atbm_common *hw_priv, unsigned long data);
+int atbm_wsm_fast_cfg_send(struct atbm_common *hw_priv, unsigned long data);
 
 int atbm_ioctl_add(void);
 void atbm_ioctl_free(void);
