@@ -21,7 +21,26 @@ the full vendor SDK release. This version keeps only the driver.
 
 [thingino-firmware](https://github.com/themactep/thingino-firmware)'s
 `wifi-atbm6441` package builds this driver for boards that use the
-ATBM6441 chip, starting with the Jooan S7-U (Ingenic T23ZN).
+ATBM6441 chip, starting with the Jooan S7-U (Ingenic T23ZN),
+also tested on T41ZN.
+
+## Unified Ingenic platform support
+
+The newer version of this driver includes generic support for all
+of the Ingenic Txx SoC variants, without having to declare any
+further specific SoC definitions.
+
+You only need to select PLATFORM_INGENIC as the target platform,
+which is done by default in the Makefile.
+
+The kernel module doesn't try to detect mmc1/mmc2 by default
+any more, as this can be done using the userland mmc command-line tool.
+
+If you still need to run mmc_detect in this kernel module, define one of
+the following config options:
+
+CONFIG_ATBM_WIFI_JZ_DETECT_MMC1_APPOLO_SDIO - previously tested on T31
+CONFIG_ATBM_WIFI_JZ_DETECT_MMC1_ATBM_PLATFORM - previously tested on T41
 
 ## License
 

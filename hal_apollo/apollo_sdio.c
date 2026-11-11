@@ -954,10 +954,17 @@ static int atbm_detect_card(const struct atbm_platform_data *pdata)
 
 			if(host->card == NULL)
 			{
-				#if (ATBM_WIFI_PLATFORM == PLATFORM_INGENIC_T31)
+				#ifdef ATBM_WIFI_JZ_DETECT_MMC1_APPOLO_SDIO
+					//Call jzmmc_manual_detect() only if explicitly configured
 			 	    extern int jzmmc_manual_detect(int index, int on);
 					jzmmc_manual_detect(1,1);
-				#else
+				#endif
+
+				#ifndef ATBM_NO_MMC_DETECT_CHANGE
+					//The driver calls mmc_detect() by default
+					//but it's not used on Ingenic targets where
+					//ATBM_NO_MMC_DETECT_CHANGE will be set
+					//by default for all Ingenic targets.
 					printk("mmc detect change\n");
 					mmc_detect_change(host, 10);
 				#endif
