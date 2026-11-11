@@ -29,10 +29,9 @@ CUSTOMER_SUPPORT_USED=y
 #PLATFORM_HI3516EV200                         19
 #PLATFORM_XUNWEI_2G                            20
 #PLATFORM_NVT98517       21
-#PLATFORM_INGENIC_T40  22
-#PLATFORM_INGENIC_T41  23
+#PLATFORM_INGENIC			22
 export
-platform ?=PLATFORM_INGENIC_T41
+platform ?= PLATFORM_INGENIC
 #Android
 #Linux
 sys ?= linux
@@ -48,22 +47,27 @@ MAKEFILE_SUB ?= Makefile.build
 endif
 
 
-ifeq ($(platform),PLATFORM_INGENIC_T41)
-#KERDIR:=/wifi_prj/staff/zhouzhanchao/iTop4412_Kernel_3.0/
-#KERDIR:=/home/xzq/svn_nvt_sdk/new_ipc_sdk/sdk_2.0/98517/6032i/NA51023_BSP_v1.1.1/linux-kernel/OUTPUT
-#KERDIR:=/wifi_prj/staff/wangsiyao/baichuan/linux-kernel/OUTPUT/
-#CROSS_COMPILE:=/wifi_prj/staff/wangsiyao/baichuan/mipsel-24kec-linux-uclibc-4.9-2017.07/usr/bin/mipsel-24kec-linux-uclibc-
-#KERDIR:=/home/chenhao/Ingenic/T41/Zeratul_T41_Release_20220914/Software/tools/toolchain/gcc_720/mips-gcc720-glibc229-r5.1.4/bin/mips-linux-gnu-
-KERDIR:=/home/chenhao/Ingenic/T41/Zeratul_T41_Release_20221130/Software/os/kernel-4.4.94
-CROSS_COMPILE:=/home/chenhao/Ingenic/T41/mips-gcc720-glibc226/bin/mips-linux-uclibc-gnu-
+ifeq ($(platform),PLATFORM_INGENIC)
+#Example KERDIR locations
+KERDIR ?= /home/it/Software/os/kernel-4.4.94/
+
+#Example CROSS_COMPILE definitions
+CROSS_COMPILE ?= mips-linux-uclibc-
+ATBM_WIFI__EXT_CCFLAGS = -DATBM_WIFI_PLATFORM=22  -Wno-error=date-time -I/home/ii/zeratul/T41_INDUS_20240402/SDK_20240402/Zeratul_T41_Release_20240402/Software/os/kernel/arch/mips/xburst2/soc-t41/include -I/home/ii/zeratul/T41_INDUS_20240402/SDK_20240402/Zeratul_T41_Release_20240402/Software/os/kernel/include/
+
+#Define arch to be MIPS
 arch = mips
+ifeq ($(CONFIG_ATBM_WIFI_JZ_DETECT_MMC1_APPOLO_SDIO), y)
+  ATBM_WIFI__EXT_CCFLAGS += -DATBM_WIFI_JZ_DETECT_MMC1_APPOLO_SDIO
 endif
 
-ifeq ($(platform),PLATFORM_INGENIC_T31)
-KERDIR:=/usr/lchome/zouchunlai/T31/Zeratul_T31_Release_20210730/Zeratul_Release_20210730/os/kernel
-CROSS_COMPILE:=mips-linux-uclibc-gnu-
-ATBM_WIFI__EXT_CCFLAGS = -DATBM_WIFI_PLATFORM=22
-arch = mips
+ifeq ($(CONFIG_ATBM_WIFI_JZ_DETECT_MMC1_ATBM_PLATFORM), y)
+  ATBM_WIFI__EXT_CCFLAGS += -DATBM_WIFI_JZ_DETECT_MMC1_ATBM_PLATFORM
+endif
+
+#Don't run mmc_detect_change() on Ingenic platforms, instead use jzmmc_manual_detect() if needed
+ATBM_WIFI__EXT_CCFLAGS += -DATBM_NO_MMC_DETECT_CHANGE
+
 endif
 
 
@@ -369,10 +373,7 @@ ifeq ($(platform),PLATFORM_NVT98517)
 export
 ATBM_WIFI__EXT_CCFLAGS = -DATBM_WIFI_PLATFORM=14
 endif
-ifeq ($(platform),PLATFORM_INGENIC_T41)
-export
-ATBM_WIFI__EXT_CCFLAGS = -DATBM_WIFI_PLATFORM=23
-endif
+
 export 
 include $(src)/Makefile.build.kernel
 #obj-y += wifi_sdio/

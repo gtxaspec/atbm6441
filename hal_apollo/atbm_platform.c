@@ -39,10 +39,7 @@
 #define PLATFORMINF     "rockchip"
 #endif
 #if (ATBM_WIFI_PLATFORM == 22)
-#define PLATFORMINF     "XM"
-#endif
-#if (ATBM_WIFI_PLATFORM == 23)
-#define PLATFORMINF     "INGENIC_T41"
+#define PLATFORMINF     "ingenic"
 #endif
 #if (ATBM_WIFI_PLATFORM == 9)
 #define PLATFORMINF     "amlogic_905X"
@@ -245,14 +242,10 @@ static int atbm_platform_insert_crtl(const struct atbm_platform_data *pdata,bool
 		}
 	}
 	#endif
-	#if (ATBM_WIFI_PLATFORM == PLATFORM_INGENIC_T41)
-	//	extern int jzmmc_manual_detect(int index, int on);
-		printk("++ scan sdio card0 ++\n");
-	//	jzmmc_manual_detect(0,enabled);
-		msleep(100);
-		printk("++ scan sdio card1 ++\n");	
-	//	jzmmc_manual_detect(1,enabled);
-		
+	#ifdef ATBM_WIFI_JZ_DETECT_MMC1_ATBM_PLATFORM
+		//Call jzmmc_manual_detect() only if explicitly configured
+		extern int jzmmc_manual_detect(int index, int on);
+		jzmmc_manual_detect(1,enabled);
 	#endif
 	#if (ATBM_WIFI_PLATFORM == PLATFORM_SUN6I)
 	{
